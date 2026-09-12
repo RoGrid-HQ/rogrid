@@ -1,0 +1,9 @@
+[package]
+name = "rogrid"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+include_dir = "0.7"
