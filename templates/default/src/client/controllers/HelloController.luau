@@ -1,7 +1,7 @@
-local HelloService = {}
+local HelloController = {}
 
-function HelloService:Start()
-	print("[HelloService] started on client")
+function HelloController:Start()
+	print("[HelloController] started on client")
 end
 
-return HelloService
+return HelloController

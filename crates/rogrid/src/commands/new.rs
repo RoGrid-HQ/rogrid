@@ -14,6 +14,14 @@ pub struct Args {
     pub name: String,
 }
 
+/// Outcome of one external setup command.
+enum Step {
+    Ok,
+    Failed,   // ran, but exited non-zero
+    NotFound, // the tool isn't installed / not on PATH
+    Skipped,  // not attempted because an earlier step it depends on failed
+}
+
 pub fn run(args: Args) -> Result<()> {
     let dest = Path::new(&args.name);
     if dest.exists() {
@@ -33,12 +41,19 @@ pub fn run(args: Args) -> Result<()> {
 
     // -q = quiet. Suppresses git's "Initialized empty repository in ..." line
     // so our own output stays clean.
-    run_tool(dest, "git", &["init", "-q"]);
+    let git = run_tool(dest, "git", &["init", "-q"]);
 
-    // Installs the tools pinned in rokit.toml (just Rojo for now).
+    // Installs the tools pinned in rokit.toml (Rojo and Wally).
     // --no-trust-check skips Rokit's interactive "do you trust this author?"
     // prompt, which would otherwise block a scripted install.
-    run_tool(dest, "rokit", &["install", "--no-trust-check"]);
+    let rokit = run_tool(dest, "rokit", &["install", "--no-trust-check"]);
+
+    // Installs the dependencies pinned in wally.toml.
+    // Wally itself comes from rokit, so don't bother if that step failed.
+    let wally = match rokit {
+        Step::Ok => run_tool(dest, "wally", &["install"]),
+        _ => Step::Skipped,
+    };
 
     println!(
         r#"
@@ -51,17 +66,37 @@ pub fn run(args: Args) -> Result<()> {
 ║                                                     ║
 ║              RoGrid project created!                ║
 ╚═════════════════════════════════════════════════════╝
-
-Next steps:
-  cd {folder}
-  rogrid dev
-
-Enjoy RoGrid!
-"#,
-        folder = args.name
+"#
     );
 
+    println!("Setup:");
+    report("git init", &git);
+    report("rokit install", &rokit);
+    report("wally install", &wally);
+
+    let all_ok = matches!(rokit, Step::Ok) && matches!(wally, Step::Ok);
+
+    if all_ok {
+        println!("\nNext steps:\n  cd {}\n  rogrid dev\n\nEnjoy RoGrid!\n", args.name);
+    } else {
+        println!(
+            "\nSome setup steps did not complete. Inside {}, run the failed commands above, then:\n  rogrid dev\n",
+            args.name
+        );
+    }
+
     Ok(())
+}
+
+/// Prints one line of the setup report.
+fn report(label: &str, step: &Step) {
+    let (mark, note) = match step {
+        Step::Ok => ("[ok]", ""),
+        Step::Failed => ("[!!]", " (exited with an error, see output above)"),
+        Step::NotFound => ("[!!]", " (not installed or not on PATH)"),
+        Step::Skipped => ("[--]", " (skipped, depends on a failed step)"),
+    };
+    println!("  {mark} {label}{note}");
 }
 
 /// Recursively writes an embedded directory to `dest`.
@@ -74,8 +109,16 @@ fn write_dir(dir: &Dir, dest: &Path, name: &str) -> Result<()> {
         }
         match file.contents_utf8() {
             // Text file: do the placeholder replacement.
-            Some(text) => std::fs::write(&out, text.replace("{{project_name}}", name)),
+            // {{rogrid_version}} becomes the CLI's own version (from Cargo.toml),
+            // so a new project always depends on the matching rogrid-hq/core release.
+            Some(text) => std::fs::write(
+                &out,
+                text.replace("{{project_name}}", name)
+                    .replace("{{rogrid_version}}", env!("CARGO_PKG_VERSION")),
+            ),
+          
             // Binary file (e.g. a future .rbxm map): write bytes untouched.
+            // Thinking we could use this to make a few template games and include the actual map.
             None => std::fs::write(&out, file.contents()),
         }
         .with_context(|| format!("writing {}", out.display()))?;
@@ -87,11 +130,13 @@ fn write_dir(dir: &Dir, dest: &Path, name: &str) -> Result<()> {
 }
 
 /// Runs an external command inside `cwd`. Never fails the whole `new`:
-/// a missing git or rokit is a warning, the project files are already on disk.
-fn run_tool(cwd: &Path, tool: &str, args: &[&str]) {
+/// the project files are already on disk, so a missing tool is reported,
+/// not fatal.
+fn run_tool(cwd: &Path, tool: &str, args: &[&str]) -> Step {
     match Command::new(tool).args(args).current_dir(cwd).status() {
-        Ok(s) if s.success() => {}
-        Ok(_) => eprintln!("warning: `{tool}` exited with an error"),
-        Err(_) => eprintln!("warning: `{tool}` not found, skipping"),
+        Ok(s) if s.success() => Step::Ok,
+        Ok(_) => Step::Failed,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Step::NotFound,
+        Err(_) => Step::Failed,
     }
 }
