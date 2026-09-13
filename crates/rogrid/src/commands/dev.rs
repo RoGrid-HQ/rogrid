@@ -1,6 +1,7 @@
+use crate::tools;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
-use std::process::{Command, exit};
+use std::process::exit;
 
 /// Start the Rojo server for the current project
 #[derive(clap::Args)]
@@ -20,13 +21,7 @@ pub fn run(_args: Args) -> Result<()> {
     // own "ready" message with the project name. If the process exits before
     // the API answers, report "Rojo failed to start". Don't parse Rojo's text
     // output. It has no stability guarantee; exit code + HTTP API do.
-    let status = Command::new("rojo")
-        .arg("serve")
-        .status()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => anyhow::anyhow!("rojo not found — run `rokit install` in this folder"),
-            _ => anyhow::anyhow!("failed to start rojo: {e}"),
-        })?;
+    let status = tools::status("rojo", &["serve"])?;
 
     // Exit with the same exit code as Rojo, or 1 if unavailable
     exit(status.code().unwrap_or(1));
@@ -46,15 +41,7 @@ fn ensure_packages() -> Result<()> {
     }
 
     println!("Packages/ not found, running `wally install`...");
-    let status = Command::new("wally")
-        .arg("install")
-        .status()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => anyhow::anyhow!("wally not found — run `rokit install` in this folder"),
-            _ => anyhow::anyhow!("failed to start wally: {e}"),
-        })?;
-
-    if !status.success() {
+    if !tools::status("wally", &["install"])?.success() {
         bail!("`wally install` failed (see output above)");
     }
 

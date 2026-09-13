@@ -1,7 +1,7 @@
+use crate::tools::{self, Step};
 use anyhow::{bail, Context, Result};
 use include_dir::{include_dir, Dir};
 use std::path::Path;
-use std::process::Command;
 
 // Bakes the whole templates/default folder into the binary at compile time.
 // $CARGO_MANIFEST_DIR = crates/rogrid, so ../../ is the repo root.
@@ -12,14 +12,6 @@ static TEMPLATE: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/default
 pub struct Args {
     /// Project name (also used as the folder name)
     pub name: String,
-}
-
-/// Outcome of one external setup command.
-enum Step {
-    Ok,
-    Failed,   // ran, but exited non-zero
-    NotFound, // the tool isn't installed / not on PATH
-    Skipped,  // not attempted because an earlier step it depends on failed
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -41,17 +33,17 @@ pub fn run(args: Args) -> Result<()> {
 
     // -q = quiet. Suppresses git's "Initialized empty repository in ..." line
     // so our own output stays clean.
-    let git = run_tool(dest, "git", &["init", "-q"]);
+    let git = tools::run("git", &["init", "-q"], dest);
 
     // Installs the tools pinned in rokit.toml (Rojo and Wally).
     // --no-trust-check skips Rokit's interactive "do you trust this author?"
     // prompt, which would otherwise block a scripted install.
-    let rokit = run_tool(dest, "rokit", &["install", "--no-trust-check"]);
+    let rokit = tools::run("rokit", &["install", "--no-trust-check"], dest);
 
     // Installs the dependencies pinned in wally.toml.
     // Wally itself comes from rokit, so don't bother if that step failed.
     let wally = match rokit {
-        Step::Ok => run_tool(dest, "wally", &["install"]),
+        Step::Ok => tools::run("wally", &["install"], dest),
         _ => Step::Skipped,
     };
 
@@ -70,13 +62,11 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     println!("Setup:");
-    report("git init", &git);
-    report("rokit install", &rokit);
-    report("wally install", &wally);
+    git.report("git init");
+    rokit.report("rokit install");
+    wally.report("wally install");
 
-    let all_ok = matches!(rokit, Step::Ok) && matches!(wally, Step::Ok);
-
-    if all_ok {
+    if rokit.is_ok() && wally.is_ok() {
         println!("\nNext steps:\n  cd {}\n  rogrid dev\n\nEnjoy RoGrid!\n", args.name);
     } else {
         println!(
@@ -86,17 +76,6 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Prints one line of the setup report.
-fn report(label: &str, step: &Step) {
-    let (mark, note) = match step {
-        Step::Ok => ("[ok]", ""),
-        Step::Failed => ("[!!]", " (exited with an error, see output above)"),
-        Step::NotFound => ("[!!]", " (not installed or not on PATH)"),
-        Step::Skipped => ("[--]", " (skipped, depends on a failed step)"),
-    };
-    println!("  {mark} {label}{note}");
 }
 
 /// Recursively writes an embedded directory to `dest`.
@@ -116,9 +95,7 @@ fn write_dir(dir: &Dir, dest: &Path, name: &str) -> Result<()> {
                 text.replace("{{project_name}}", name)
                     .replace("{{rogrid_version}}", env!("CARGO_PKG_VERSION")),
             ),
-          
             // Binary file (e.g. a future .rbxm map): write bytes untouched.
-            // Thinking we could use this to make a few template games and include the actual map.
             None => std::fs::write(&out, file.contents()),
         }
         .with_context(|| format!("writing {}", out.display()))?;
@@ -127,16 +104,4 @@ fn write_dir(dir: &Dir, dest: &Path, name: &str) -> Result<()> {
         write_dir(sub, dest, name)?;
     }
     Ok(())
-}
-
-/// Runs an external command inside `cwd`. Never fails the whole `new`:
-/// the project files are already on disk, so a missing tool is reported,
-/// not fatal.
-fn run_tool(cwd: &Path, tool: &str, args: &[&str]) -> Step {
-    match Command::new(tool).args(args).current_dir(cwd).status() {
-        Ok(s) if s.success() => Step::Ok,
-        Ok(_) => Step::Failed,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Step::NotFound,
-        Err(_) => Step::Failed,
-    }
 }
