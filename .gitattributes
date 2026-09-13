@@ -1,0 +1,8 @@
+# Normalise line endings: LF in the repo and in every checkout, on every OS.
+# Windows editors and tools handle LF fine; mixed endings break exact-match
+# tooling and produce noisy diffs.
+* text=auto eol=lf
+
+# Roblox binary formats must never be touched by text conversion.
+*.rbxm binary
+*.rbxl binary
