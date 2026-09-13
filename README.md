@@ -65,12 +65,30 @@ return CoinsService
 | --- | --- |
 | `rogrid new <name>` | Creates a project, runs `git init` and `rokit install` |
 | `rogrid dev` | Starts the Rojo server for the current project |
+| `rogrid generate service <name>` | Creates a server service with `Init()` and `Start()` |
+| `rogrid generate controller <name>` | Creates a client controller with `Init()` and `Start()` |
+| `rogrid generate module <name>` | Creates a shared module |
+
+## Generators
+
+Run generators from your project folder or any folder inside it.
+
+```sh
+rogrid generate service Inventory    # src/server/services/InventoryService.luau
+rogrid generate controller Camera    # src/client/controllers/CameraController.luau
+rogrid generate module Currency      # src/shared/Currency.luau
+```
+
+Services and controllers are picked up automatically by the runtime. Their `Init()` methods run before any `Start()` methods on the same side (server or client). Shared modules return a plain table and must be required where needed.
+
+The `Service` and `Controller` suffixes are added only if missing, so `InventoryService` also works. Names must start with an ASCII letter or `_` and contain only ASCII letters, numbers, or `_`; keywords and reserved filenames are rejected. Pass a name without a file extension or nested path. Existing files are never overwritten.
 
 ## Contributing
 
 ```
 crates/rogrid/       the CLI (Rust)
 templates/default/   the starter project, embedded into the CLI
+templates/generators/ Luau templates used by generate, also embedded into the CLI
 ```
 
 Build locally with `cargo run -- new demo`.

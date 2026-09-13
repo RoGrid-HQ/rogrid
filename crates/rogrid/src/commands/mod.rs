@@ -1,6 +1,7 @@
 use clap::Parser;
 
 mod dev;
+mod generate;
 mod new;
 
 #[derive(Parser)]
@@ -14,6 +15,7 @@ pub struct Cli {
 enum Command {
     New(new::Args),
     Dev(dev::Args),
+    Generate(generate::Args),
 }
 
 impl Cli {
@@ -21,6 +23,7 @@ impl Cli {
         match self.command {
             Command::New(args) => new::run(args),
             Command::Dev(args) => dev::run(args),
+            Command::Generate(args) => generate::run(args),
         }
     }
 }
