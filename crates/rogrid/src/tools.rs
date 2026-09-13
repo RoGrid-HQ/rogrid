@@ -10,7 +10,7 @@ use std::process::{Command, ExitStatus};
 pub enum Step {
     Ok,
     Failed,   // ran, but exited non-zero
-    NotFound, // the tool isn't installed / not on PATH
+    NotFound(String), // the tool isn't installed / not on PATH; carries its name for the hint
     Skipped,  // not attempted because an earlier step it depends on failed
 }
 
@@ -20,12 +20,13 @@ impl Step {
     }
 
     /// Prints one line of a setup report, e.g. `  [ok] rokit install`.
+    /// A missing tool gets the same install hint `status` puts in its error.
     pub fn report(&self, label: &str) {
         let (mark, note) = match self {
-            Step::Ok => ("[ok]", ""),
-            Step::Failed => ("[!!]", " (exited with an error, see output above)"),
-            Step::NotFound => ("[!!]", " (not installed or not on PATH)"),
-            Step::Skipped => ("[--]", " (skipped, depends on a failed step)"),
+            Step::Ok => ("[ok]", String::new()),
+            Step::Failed => ("[!!]", " (exited with an error, see output above)".to_string()),
+            Step::NotFound(tool) => ("[!!]", format!(" ({tool} not found — {})", install_hint(tool))),
+            Step::Skipped => ("[--]", " (skipped, depends on a failed step)".to_string()),
         };
         println!("  {mark} {label}{note}");
     }
@@ -37,7 +38,7 @@ pub fn run(tool: &str, args: &[&str], cwd: &Path) -> Step {
     match Command::new(tool).args(args).current_dir(cwd).status() {
         Ok(s) if s.success() => Step::Ok,
         Ok(_) => Step::Failed,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Step::NotFound,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Step::NotFound(tool.to_string()),
         Err(_) => Step::Failed,
     }
 }
