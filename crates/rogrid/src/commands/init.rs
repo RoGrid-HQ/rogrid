@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -11,13 +11,14 @@ use crate::tools::{self, Tool};
 
 /// Each choice comes from its flag when given, otherwise from a prompt.
 pub fn run(
+    target: Option<String>,
     name: Option<String>,
+    force: bool,
     package_manager: Option<String>,
     tool_manager: Option<String>,
 ) -> Result<()> {
-    let name = resolve_name(name)?;
     let cwd = env::current_dir().context("could not read the current directory")?;
-    let path = project_path(&cwd, &name)?;
+    let (path, name) = resolve_target(&cwd, target, name, force)?;
 
     let package_manager = match package_manager {
         Some(name) => tools::find(tools::PACKAGE_MANAGERS, &name)?,
@@ -30,7 +31,7 @@ pub fn run(
         None => prompt::select("Tool manager:", &options)?,
     };
 
-    fs::create_dir(&path).with_context(|| format!("could not create {}", path.display()))?;
+    fs::create_dir_all(&path).with_context(|| format!("could not create {}", path.display()))?;
     let vars = tools::vars(&name, &package_manager, &tool_manager);
     let skip = tools::other_manifests(&package_manager);
     template::render(&template::DEFAULT, &path, &vars, &skip)?;
@@ -51,7 +52,12 @@ pub fn run(
         package_manager.name,
         tool_manager.name
     );
-    println!("\nNext steps:\n  cd {name}\n  rojo serve");
+    println!("\nNext steps:");
+    if path != cwd {
+        let folder = path.strip_prefix(&cwd).unwrap_or(&path);
+        println!("  cd {}", folder.display());
+    }
+    println!("  rojo serve");
 
     if failures.is_empty() {
         return Ok(());
@@ -64,15 +70,66 @@ pub fn run(
     bail!("{} install step(s) failed", failures.len());
 }
 
-/// Uses the name from the command line, or prompts for one.
-fn resolve_name(name: Option<String>) -> Result<String> {
-    let name = match name {
-        Some(name) => name,
-        None => prompt::text("Project name:")?,
-    };
+/// Where the project goes and what it is called. A folder that is not empty
+/// is refused as soon as it is known, before any prompt, unless `force` is set.
+///
+/// `.` means the current folder, with the name prompted for and the folder's
+/// own name suggested. Otherwise the target is a new folder under the current
+/// one, prompted for when omitted, and the name defaults to it.
+fn resolve_target(
+    cwd: &Path,
+    target: Option<String>,
+    name: Option<String>,
+    force: bool,
+) -> Result<(PathBuf, String)> {
+    if target.as_deref().is_some_and(is_current_dir) {
+        ensure_available(cwd, force)?;
+        let suggested = cwd
+            .file_name()
+            .and_then(|folder| normalize_name(&folder.to_string_lossy()));
+        let name = match name {
+            Some(name) => name,
+            None => prompt::text("Project name:", suggested.as_deref())?,
+        };
+        validate_name(&name)?;
+        return Ok((cwd.to_path_buf(), name));
+    }
 
+    let folder = match (target, &name) {
+        (Some(folder), _) => folder,
+        (None, Some(name)) => name.clone(),
+        (None, None) => prompt::text("Project name:", None)?,
+    };
+    let name = name.unwrap_or_else(|| folder.clone());
+    validate_name(&folder)?;
     validate_name(&name)?;
-    Ok(name)
+    let path = cwd.join(folder);
+    ensure_available(&path, force)?;
+    Ok((path, name))
+}
+
+/// Whether the target is `.` in any spelling, such as `./`.
+fn is_current_dir(target: &str) -> bool {
+    let mut components = Path::new(target).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::CurDir), None)
+    )
+}
+
+/// A folder name made valid as a project name: lowercased, with every run of
+/// other characters turned into one dash. `None` when nothing valid is left.
+fn normalize_name(folder: &str) -> Option<String> {
+    let mut name = String::new();
+    for c in folder.to_lowercase().chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+            name.push(c);
+        } else if !name.is_empty() && !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    let name = name.trim_end_matches('-');
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Lowercase letters, digits, dashes and underscores only.
@@ -93,13 +150,20 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Where the project will be created. Refuses a folder that already exists.
-fn project_path(parent: &Path, name: &str) -> Result<PathBuf> {
-    let path = parent.join(name);
-
-    if path.exists() {
-        bail!("{} already exists", path.display());
+/// Refuses a folder that already has something in it, unless `force` is set.
+fn ensure_available(path: &Path, force: bool) -> Result<()> {
+    if force || !path.exists() {
+        return Ok(());
     }
 
-    Ok(path)
+    let mut entries =
+        fs::read_dir(path).with_context(|| format!("could not read {}", path.display()))?;
+    if entries.next().is_some() {
+        bail!(
+            "{} is not empty; pass --force to set up the project in it anyway",
+            path.display()
+        );
+    }
+
+    Ok(())
 }

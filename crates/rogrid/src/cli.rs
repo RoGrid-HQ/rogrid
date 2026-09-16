@@ -15,10 +15,19 @@ pub struct Cli {
 /// Every command. Its doc comment is the one-line description shown in help.
 #[derive(Subcommand)]
 pub enum Command {
-    /// Create a new RoGrid project in a new folder.
+    /// Create a new RoGrid project in a new folder, or in the current one with `.`.
     Init {
-        /// Project name. Prompted for when omitted.
+        /// Folder to create, or `.` for the current folder. Prompted for when omitted.
+        #[arg(value_name = "FOLDER")]
+        target: Option<String>,
+
+        /// Project name. Defaults to the folder name; prompted for with `.`.
+        #[arg(long, value_name = "NAME")]
         name: Option<String>,
+
+        /// Set up the project in a folder that is not empty, overwriting files it writes.
+        #[arg(long)]
+        force: bool,
 
         /// Package manager to use. Prompted for when omitted.
         #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::PACKAGE_MANAGERS)))]

@@ -27,6 +27,11 @@ pub trait Tool {
 /// Rojo goes into every project. Same `alias=owner/repo@version` form as `pins` below.
 pub const ROJO: &str = "rojo=rojo-rbx/rojo@7.7.0";
 
+/// The CLI pins itself at the version that created the project, so everyone
+/// working on it runs the same one. Only tool managers with their own manifest
+/// can install it: the package managers' registries have no rogrid package.
+pub const ROGRID: &str = concat!("rogrid=RoGrid-HQ/rogrid@", env!("CARGO_PKG_VERSION"));
+
 #[derive(Clone, Copy)]
 pub struct PackageManager {
     pub name: &'static str,
@@ -301,14 +306,16 @@ fn pin_lines(package_manager: &PackageManager, tool_manager: &ToolManager) -> St
         .join("\n")
 }
 
-/// What this tool manager installs: Rojo, plus the package manager's own pins
-/// unless the tool manager is the package manager itself, which already has them.
+/// What this tool manager installs: Rojo, plus the CLI and the package
+/// manager's own pins unless the tool manager is the package manager itself,
+/// which already has itself and cannot install the CLI.
 fn pins(
     package_manager: &PackageManager,
     tool_manager: &ToolManager,
 ) -> impl Iterator<Item = &'static str> {
     let own = tool_manager.manifest.is_empty();
-    std::iter::once(ROJO).chain(package_manager.pins.iter().copied().filter(move |_| !own))
+    let extra = std::iter::once(ROGRID).chain(package_manager.pins.iter().copied());
+    std::iter::once(ROJO).chain(extra.filter(move |_| !own))
 }
 
 /// Splits `alias=owner/repo@version` into alias, spec, repo and version placeholders.

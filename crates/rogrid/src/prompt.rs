@@ -23,10 +23,14 @@ impl<T: Tool> fmt::Display for Row<T> {
     }
 }
 
-/// Asks the user for a line of text.
-pub fn text(message: &str) -> Result<String> {
+/// Asks the user for a line of text. Pressing Enter on an empty line takes the default.
+pub fn text(message: &str, default: Option<&str>) -> Result<String> {
     ensure_terminal(message)?;
-    Ok(Text::new(message).prompt()?)
+    let mut prompt = Text::new(message);
+    if let Some(default) = default {
+        prompt = prompt.with_default(default);
+    }
+    Ok(prompt.prompt()?)
 }
 
 /// Asks the user to pick one supported tool. The cursor starts on the first installed one.

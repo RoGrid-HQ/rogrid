@@ -15,9 +15,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Init {
+            target,
             name,
+            force,
             package_manager,
             tool_manager,
-        } => commands::init::run(name, package_manager, tool_manager),
+        } => commands::init::run(target, name, force, package_manager, tool_manager),
     }
 }
