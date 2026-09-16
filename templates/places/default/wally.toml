@@ -1,0 +1,9 @@
+[package]
+name = "local/{{project_name}}"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+private = true
+
+[dependencies]
+RoGrid = "rogrid/rogrid@^0.1.0"

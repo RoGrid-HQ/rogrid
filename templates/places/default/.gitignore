@@ -1,0 +1,13 @@
+# Installed packages
+/{{packages_dir}}
+/{{server_packages_dir}}
+
+# Build output
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+/build
+
+# Generated
+sourcemap.json

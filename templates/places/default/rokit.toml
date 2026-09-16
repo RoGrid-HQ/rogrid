@@ -1,0 +1,3 @@
+[tools]
+rojo = "{{rojo_pin}}"
+{{package_manager_pin}}

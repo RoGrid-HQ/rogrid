@@ -1,0 +1,15 @@
+name = "local/{{project_name}}"
+version = "0.1.0"
+private = true
+
+[target]
+environment = "roblox"
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[dependencies]
+rogrid = { name = "rogrid/rogrid", version = "^0.1.0" }
+
+[engines]
+pesde = "^0.7.4"

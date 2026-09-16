@@ -1,0 +1,17 @@
+[package]
+name = "local/{{project_name}}"
+version = "0.1.0"
+private = true
+
+[target]
+environment = "shared"
+
+[dependencies]
+RoGrid = { name = "rogrid/rogrid", version = "^0.1.0" }
+
+[tools]
+rojo = "{{rojo_pin}}"
+
+[scripts]
+serve = "rojo serve"
+build = "rojo build -o build.rbxl"

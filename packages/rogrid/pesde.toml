@@ -1,0 +1,19 @@
+name = "rogrid/rogrid"
+version = "0.1.0"
+description = "The RoGrid core library"
+license = "MIT"
+repository = "https://github.com/RoGrid-HQ/rogrid"
+
+includes = [
+  "pesde.toml",
+  "LICENSE",
+  "src/**/*.luau",
+]
+
+[target]
+environment = "roblox"
+lib = "src/init.luau"
+build_files = ["src"]
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
