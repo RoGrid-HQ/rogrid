@@ -1,4 +1,4 @@
-name = "local/{{project_name}}"
+name = "local/{{package_name}}"
 version = "0.1.0"
 private = true
 
@@ -11,5 +11,13 @@ default = "https://github.com/pesde-pkg/index"
 [dependencies]
 rogrid = { name = "rogrid/rogrid", version = "^0.1.0" }
 
+# Generates Rojo config for installed packages. Runs on Lune, which pesde downloads itself.
+[dev_dependencies]
+scripts_rojo = { name = "pesde/scripts_rojo", version = "^0.2.0", target = "lune" }
+
+[scripts]
+roblox_sync_config_generator = { runtime = "lune", path = ".pesde/scripts_rojo/roblox_sync_config_generator.luau" }
+
 [engines]
 pesde = "^0.7.4"
+lune = "^0.10.5"

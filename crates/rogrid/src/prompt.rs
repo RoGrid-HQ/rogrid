@@ -7,49 +7,41 @@ use crate::binaries;
 use crate::tools::Tool;
 
 /// A tool as shown in a prompt, with whether its binary was found on the PATH.
-struct Choice {
-    tool: Tool,
+struct Row<T> {
+    tool: T,
     installed: Option<bool>,
 }
 
-impl fmt::Display for Choice {
+impl<T: Tool> fmt::Display for Row<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !self.tool.supported {
-            return write!(f, "{:<8} (soon)", self.tool.name);
-        }
+        let name = self.tool.name();
         match self.installed {
-            Some(true) => write!(f, "{:<8} ✓ installed", self.tool.name),
-            Some(false) => write!(f, "{:<8} ✗ not found", self.tool.name),
-            None => write!(f, "{}", self.tool.name),
+            Some(true) => write!(f, "{name:<8} ✓ installed"),
+            Some(false) => write!(f, "{name:<8} ✗ not found"),
+            None => write!(f, "{name}"),
         }
     }
 }
 
-/// Asks the user to pick one tool. Unsupported tools are shown but cannot be chosen.
-/// The cursor starts on the first supported, installed one.
-pub fn select(message: &str, tools: &[Tool]) -> Result<Tool> {
-    let start = tools
+/// Asks the user to pick one supported tool. The cursor starts on the first installed one.
+pub fn select<T: Tool + Copy>(message: &str, tools: &[T]) -> Result<T> {
+    let rows: Vec<Row<T>> = tools
         .iter()
-        .position(|t| t.supported && t.binary.is_some_and(binaries::is_installed))
-        .or_else(|| tools.iter().position(|t| t.supported))
+        .filter(|tool| tool.supported())
+        .map(|&tool| Row {
+            tool,
+            installed: tool.binary().map(binaries::is_installed),
+        })
+        .collect();
+
+    let start = rows
+        .iter()
+        .position(|row| row.installed == Some(true))
         .unwrap_or(0);
 
-    loop {
-        let choices: Vec<Choice> = tools
-            .iter()
-            .map(|&tool| Choice {
-                tool,
-                installed: tool.binary.map(binaries::is_installed),
-            })
-            .collect();
+    let row = Select::new(message, rows)
+        .with_starting_cursor(start)
+        .prompt()?;
 
-        let choice = Select::new(message, choices)
-            .with_starting_cursor(start)
-            .prompt()?;
-
-        if choice.tool.supported {
-            return Ok(choice.tool);
-        }
-        println!("{} support is coming soon, pick another", choice.tool.name);
-    }
+    Ok(row.tool)
 }

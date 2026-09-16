@@ -1,6 +1,7 @@
 # Installed packages
 /{{packages_dir}}
 /{{server_packages_dir}}
+{{ignores}}
 
 # Build output
 *.rbxl

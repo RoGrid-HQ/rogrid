@@ -1,5 +1,5 @@
 [package]
-name = "local/{{project_name}}"
+name = "local/{{package_name}}"
 version = "0.1.0"
 private = true
 

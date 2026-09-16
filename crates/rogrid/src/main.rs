@@ -1,6 +1,8 @@
 mod binaries;
 mod cli;
 mod commands;
+mod install;
+mod process;
 mod prompt;
 mod template;
 mod tools;

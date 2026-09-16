@@ -1,5 +1,6 @@
 name = "rogrid/rogrid"
 version = "0.1.0"
+authors = ["JustSammyyy"]
 description = "The RoGrid core library"
 license = "MIT"
 repository = "https://github.com/RoGrid-HQ/rogrid"
@@ -7,6 +8,7 @@ repository = "https://github.com/RoGrid-HQ/rogrid"
 includes = [
   "pesde.toml",
   "LICENSE",
+  "docs/**/*.md",
   "src/**/*.luau",
 ]
 

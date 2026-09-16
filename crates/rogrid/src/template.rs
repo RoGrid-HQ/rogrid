@@ -37,7 +37,7 @@ pub fn render(template: &Dir, dest: &Path, vars: &Vars, skip: &[&str]) -> Result
 }
 
 /// Replaces every `{{key}}` in `text` with its value.
-fn fill(text: &str, vars: &Vars) -> String {
+pub fn fill(text: &str, vars: &Vars) -> String {
     vars.iter().fold(text.to_string(), |text, (key, value)| {
         text.replace(&format!("{{{{{key}}}}}"), value)
     })
