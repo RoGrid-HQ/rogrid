@@ -10,16 +10,24 @@ use crate::prompt;
 use crate::template;
 use crate::tools::{self, Tool};
 
-pub fn run(name: Option<String>) -> Result<()> {
+/// Each choice comes from its flag when given, otherwise from a prompt.
+pub fn run(
+    name: Option<String>,
+    package_manager: Option<String>,
+    tool_manager: Option<String>,
+) -> Result<()> {
     let name = resolve_name(name)?;
     let cwd = env::current_dir().context("could not read the current directory")?;
     let path = project_path(&cwd, &name)?;
 
-    let package_manager = prompt::select("Package manager:", tools::PACKAGE_MANAGERS)?;
-    let tool_manager = if package_manager.manages_tools {
-        None
-    } else {
-        Some(prompt::select("Tool manager:", tools::TOOL_MANAGERS)?)
+    let package_manager = match package_manager {
+        Some(name) => tools::find(tools::PACKAGE_MANAGERS, &name)?,
+        None => prompt::select("Package manager:", tools::PACKAGE_MANAGERS)?,
+    };
+    let tool_manager = match tool_manager {
+        _ if package_manager.manages_tools => None,
+        Some(name) => Some(tools::find(tools::TOOL_MANAGERS, &name)?),
+        None => Some(prompt::select("Tool manager:", tools::TOOL_MANAGERS)?),
     };
 
     fs::create_dir(&path).with_context(|| format!("could not create {}", path.display()))?;

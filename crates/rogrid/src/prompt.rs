@@ -3,7 +3,6 @@ use std::fmt;
 use anyhow::Result;
 use inquire::Select;
 
-use crate::binaries;
 use crate::tools::Tool;
 
 /// A tool as shown in a prompt, with whether its binary was found on the PATH.
@@ -30,7 +29,7 @@ pub fn select<T: Tool + Copy>(message: &str, tools: &[T]) -> Result<T> {
         .filter(|tool| tool.supported())
         .map(|&tool| Row {
             tool,
-            installed: tool.binary().map(binaries::is_installed),
+            installed: tool.installed(),
         })
         .collect();
 

@@ -1,19 +1,23 @@
 mod binaries;
 mod cli;
 mod commands;
+mod help;
 mod install;
 mod process;
 mod prompt;
 mod template;
 mod tools;
 
-use clap::Parser;
-use cli::{Cli, Command};
+use cli::Command;
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = cli::parse();
 
     match cli.command {
-        Command::Init { name } => commands::init::run(name),
+        Command::Init {
+            name,
+            package_manager,
+            tool_manager,
+        } => commands::init::run(name, package_manager, tool_manager),
     }
 }

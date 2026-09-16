@@ -1,6 +1,9 @@
 //! Everything `rogrid init` knows about package managers and tool managers.
 //! Add support for a new one by adding an entry to the matching list.
 
+use anyhow::{Context, Result};
+
+use crate::binaries;
 use crate::template;
 
 /// What both lists have in common, so the prompt and the installer can treat them alike.
@@ -14,6 +17,11 @@ pub trait Tool {
     fn supported(&self) -> bool;
     /// Commands run in the project folder, in order. `{{placeholders}}` are filled first.
     fn install(&self) -> &'static [&'static str];
+
+    /// Whether the binary is on the PATH. `None` when the tool has no binary.
+    fn installed(&self) -> Option<bool> {
+        self.binary().map(binaries::is_installed)
+    }
 }
 
 /// Rojo goes into every project. Same `alias=owner/repo@version` form as `pins` below.
@@ -212,6 +220,24 @@ pub fn tool_manifest(tool_manager: &ToolManager, package_manager: &PackageManage
         .join("\n");
 
     format!("[tools]\n{lines}\n")
+}
+
+/// Names of the supported entries, for flag validation and help.
+pub fn names<T: Tool>(items: &[T]) -> Vec<&'static str> {
+    items
+        .iter()
+        .filter(|t| t.supported())
+        .map(|t| t.name())
+        .collect()
+}
+
+/// The supported entry with this name.
+pub fn find<T: Tool + Copy>(items: &[T], name: &str) -> Result<T> {
+    items
+        .iter()
+        .find(|t| t.supported() && t.name() == name)
+        .copied()
+        .with_context(|| format!("unknown tool `{name}`, expected one of {:?}", names(items)))
 }
 
 /// Manifest files belonging to the package managers that were not chosen.

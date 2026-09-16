@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::binaries;
 use crate::process;
 use crate::template::{self, Vars};
 use crate::tools::Tool;
@@ -31,7 +30,7 @@ pub fn run_all(tools: &[&dyn Tool], vars: &Vars, dir: &Path) -> Vec<Failure> {
             continue;
         }
 
-        if !tool.binary().is_some_and(binaries::is_installed) {
+        if tool.installed() == Some(false) {
             failures.push(Failure {
                 command: commands.join(" && "),
                 fix: format!(
