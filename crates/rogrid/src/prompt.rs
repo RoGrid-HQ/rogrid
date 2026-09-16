@@ -1,7 +1,8 @@
 use std::fmt;
+use std::io::{self, IsTerminal};
 
-use anyhow::Result;
-use inquire::Select;
+use anyhow::{Result, bail};
+use inquire::{Select, Text};
 
 use crate::tools::Tool;
 
@@ -22,8 +23,16 @@ impl<T: Tool> fmt::Display for Row<T> {
     }
 }
 
+/// Asks the user for a line of text.
+pub fn text(message: &str) -> Result<String> {
+    ensure_terminal(message)?;
+    Ok(Text::new(message).prompt()?)
+}
+
 /// Asks the user to pick one supported tool. The cursor starts on the first installed one.
 pub fn select<T: Tool + Copy>(message: &str, tools: &[T]) -> Result<T> {
+    ensure_terminal(message)?;
+
     let rows: Vec<Row<T>> = tools
         .iter()
         .filter(|tool| tool.supported())
@@ -43,4 +52,15 @@ pub fn select<T: Tool + Copy>(message: &str, tools: &[T]) -> Result<T> {
         .prompt()?;
 
     Ok(row.tool)
+}
+
+/// Prompts need a terminal. Without one, say what was needed and how to pass it instead.
+fn ensure_terminal(message: &str) -> Result<()> {
+    if io::stdin().is_terminal() {
+        return Ok(());
+    }
+    let what = message.trim_end_matches(':').to_lowercase();
+    bail!(
+        "cannot ask for the {what} without a terminal; pass it as an argument, see `rogrid init --help`"
+    );
 }

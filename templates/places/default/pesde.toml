@@ -14,6 +14,7 @@ rogrid = { name = "rogrid/rogrid", version = "^0.1.0" }
 # Generates Rojo config for installed packages. Runs on Lune, which pesde downloads itself.
 [dev_dependencies]
 scripts_rojo = { name = "pesde/scripts_rojo", version = "^0.2.0", target = "lune" }
+{{tool_lines}}
 
 [scripts]
 roblox_sync_config_generator = { runtime = "lune", path = ".pesde/scripts_rojo/roblox_sync_config_generator.luau" }

@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use inquire::Text;
 
 use crate::install;
 use crate::prompt;
@@ -24,39 +23,33 @@ pub fn run(
         Some(name) => tools::find(tools::PACKAGE_MANAGERS, &name)?,
         None => prompt::select("Package manager:", tools::PACKAGE_MANAGERS)?,
     };
+    let options = tools::tool_managers_for(&package_manager);
     let tool_manager = match tool_manager {
-        _ if package_manager.manages_tools => None,
-        Some(name) => Some(tools::find(tools::TOOL_MANAGERS, &name)?),
-        None => Some(prompt::select("Tool manager:", tools::TOOL_MANAGERS)?),
+        Some(name) => tools::find(&options, &name)?,
+        None if options.len() == 1 => options[0],
+        None => prompt::select("Tool manager:", &options)?,
     };
 
     fs::create_dir(&path).with_context(|| format!("could not create {}", path.display()))?;
-    let vars = tools::vars(&name, &package_manager);
+    let vars = tools::vars(&name, &package_manager, &tool_manager);
     let skip = tools::other_manifests(&package_manager);
     template::render(&template::DEFAULT, &path, &vars, &skip)?;
 
-    if let Some(tm) = &tool_manager
-        && !tm.manifest.is_empty()
-    {
-        let manifest = tools::tool_manifest(tm, &package_manager);
-        fs::write(path.join(tm.manifest), manifest)
-            .with_context(|| format!("could not write {}", tm.manifest))?;
+    if !tool_manager.manifest.is_empty() {
+        let manifest = tools::tool_manifest(&package_manager, &tool_manager);
+        fs::write(path.join(tool_manager.manifest), manifest)
+            .with_context(|| format!("could not write {}", tool_manager.manifest))?;
     }
 
     // Tool manager first: it puts the package manager on the PATH.
-    let mut to_install: Vec<&dyn Tool> = Vec::new();
-    if let Some(tm) = &tool_manager {
-        to_install.push(tm);
-    }
-    to_install.push(&package_manager);
+    let to_install: [&dyn Tool; 2] = [&tool_manager, &package_manager];
     let failures = install::run_all(&to_install, &vars, &path);
 
-    let tools_via = tool_manager.map_or("tools built in", |tm| tm.name);
     println!(
         "\nCreated {} ({} + {})",
         path.display(),
         package_manager.name,
-        tools_via
+        tool_manager.name
     );
     println!("\nNext steps:\n  cd {name}\n  rojo serve");
 
@@ -75,7 +68,7 @@ pub fn run(
 fn resolve_name(name: Option<String>) -> Result<String> {
     let name = match name {
         Some(name) => name,
-        None => Text::new("Project name:").prompt()?,
+        None => prompt::text("Project name:")?,
     };
 
     validate_name(&name)?;

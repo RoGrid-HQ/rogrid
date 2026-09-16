@@ -41,10 +41,8 @@ pub struct PackageManager {
     pub server_packages: &'static str,
     /// Extra folders for `.gitignore`.
     pub ignores: &'static [&'static str],
-    /// Tools a tool manager must install for this manager, as `alias=owner/repo@version`.
+    /// Tools a separate tool manager must install for this manager, as `alias=owner/repo@version`.
     pub pins: &'static [&'static str],
-    /// True when the manager pins tools in its own manifest, so no tool manager is asked for.
-    pub manages_tools: bool,
 }
 
 pub const PACKAGE_MANAGERS: &[PackageManager] = &[
@@ -59,7 +57,6 @@ pub const PACKAGE_MANAGERS: &[PackageManager] = &[
         server_packages: "ServerPackages",
         ignores: &[],
         pins: &["wally=UpliftGames/wally@0.3.2"],
-        manages_tools: false,
     },
     PackageManager {
         name: "pesde",
@@ -75,7 +72,6 @@ pub const PACKAGE_MANAGERS: &[PackageManager] = &[
             "pesde=pesde-pkg/pesde@0.7.4+registry.0.2.3",
             "lune=lune-org/lune@0.10.5",
         ],
-        manages_tools: false,
     },
     PackageManager {
         name: "ember",
@@ -88,7 +84,6 @@ pub const PACKAGE_MANAGERS: &[PackageManager] = &[
         server_packages: "packages/server",
         ignores: &["/.ember-patch"],
         pins: &[],
-        manages_tools: true,
     },
 ];
 
@@ -98,9 +93,12 @@ pub struct ToolManager {
     pub binary: Option<&'static str>,
     pub homepage: &'static str,
     pub supported: bool,
-    /// File written into the project. Empty when the manager has none.
+    /// Package managers this can pair with. Empty means any.
+    pub only_with: &'static [&'static str],
+    /// File written into the project. Empty when the tools go into the package
+    /// manager's own manifest instead, through its `{{tool_lines}}` placeholder.
     pub manifest: &'static str,
-    /// One line of that file per pinned tool. Placeholders: alias, spec, repo, version.
+    /// One line per pinned tool. Placeholders: alias, spec, repo, version.
     pub pin_line: &'static str,
     pub install: &'static [&'static str],
 }
@@ -111,6 +109,7 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         binary: Some("rokit"),
         homepage: "https://github.com/rojo-rbx/rokit",
         supported: true,
+        only_with: &[],
         manifest: "rokit.toml",
         pin_line: r#"{{alias}} = "{{spec}}""#,
         install: &["rokit trust {{pin_ids}}", "rokit install"],
@@ -120,6 +119,7 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         binary: Some("aftman"),
         homepage: "https://github.com/LPGhatguy/aftman",
         supported: false,
+        only_with: &[],
         manifest: "aftman.toml",
         pin_line: r#"{{alias}} = "{{spec}}""#,
         install: &["aftman trust {{pin_ids}}", "aftman install"],
@@ -129,6 +129,7 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         binary: Some("foreman"),
         homepage: "https://github.com/Roblox/foreman",
         supported: false,
+        only_with: &[],
         manifest: "foreman.toml",
         pin_line: r#"{{alias}} = { github = "{{repo}}", version = "{{version}}" }"#,
         install: &["foreman install"],
@@ -138,15 +139,39 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         binary: Some("mise"),
         homepage: "https://mise.jdx.dev",
         supported: false,
+        only_with: &[],
         manifest: "mise.toml",
         pin_line: r#""ubi:{{repo}}" = "{{version}}""#,
         install: &["mise install"],
+    },
+    // Tools as dev dependencies from pesde's registry. `pesde install` handles them.
+    ToolManager {
+        name: "pesde",
+        binary: Some("pesde"),
+        homepage: "https://docs.pesde.dev/installation",
+        supported: true,
+        only_with: &["pesde"],
+        manifest: "",
+        pin_line: r#"{{alias}} = { name = "pesde/{{alias}}", version = "={{version}}", target = "lune" }"#,
+        install: &[],
+    },
+    // Ember pins tools in its own manifest. `embr install` handles them.
+    ToolManager {
+        name: "ember",
+        binary: Some("embr"),
+        homepage: "https://luaupm.com/docs/installation",
+        supported: false,
+        only_with: &["ember"],
+        manifest: "",
+        pin_line: r#"{{alias}} = "{{spec}}""#,
+        install: &[],
     },
     ToolManager {
         name: "none",
         binary: None,
         homepage: "",
         supported: true,
+        only_with: &[],
         manifest: "",
         pin_line: "",
         install: &[],
@@ -189,13 +214,34 @@ impl Tool for ToolManager {
     }
 }
 
+/// Supported tool managers that can pair with this package manager.
+pub fn tool_managers_for(package_manager: &PackageManager) -> Vec<ToolManager> {
+    TOOL_MANAGERS
+        .iter()
+        .filter(|tm| tm.supported)
+        .filter(|tm| tm.only_with.is_empty() || tm.only_with.contains(&package_manager.name))
+        .copied()
+        .collect()
+}
+
 /// Placeholder values for template files and install commands.
 /// `package_name` is the project name made safe for manifests, which do not allow dashes.
-pub fn vars(project_name: &str, package_manager: &PackageManager) -> Vec<(&'static str, String)> {
-    let pin_ids = pins(package_manager)
+pub fn vars(
+    project_name: &str,
+    package_manager: &PackageManager,
+    tool_manager: &ToolManager,
+) -> Vec<(&'static str, String)> {
+    let pin_ids = pins(package_manager, tool_manager)
         .filter_map(|pin| pin_var(pin, "repo"))
         .collect::<Vec<_>>()
         .join(" ");
+
+    // Only for tool managers that live inside the package manager's manifest.
+    let tool_lines = if tool_manager.manifest.is_empty() {
+        pin_lines(package_manager, tool_manager)
+    } else {
+        String::new()
+    };
 
     vec![
         ("project_name", project_name.to_string()),
@@ -206,20 +252,14 @@ pub fn vars(project_name: &str, package_manager: &PackageManager) -> Vec<(&'stat
             package_manager.server_packages.to_string(),
         ),
         ("ignores", package_manager.ignores.join("\n")),
-        ("rojo_pin", pin_var(ROJO, "spec").unwrap_or_default()),
         ("pin_ids", pin_ids),
+        ("tool_lines", tool_lines),
     ]
 }
 
-/// The tool manager's manifest for this package manager: Rojo plus the manager's pins.
-pub fn tool_manifest(tool_manager: &ToolManager, package_manager: &PackageManager) -> String {
-    let lines = pins(package_manager)
-        .filter_map(pin_vars)
-        .map(|vars| template::fill(tool_manager.pin_line, &vars))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!("[tools]\n{lines}\n")
+/// The tool manager's own manifest file, for tool managers that have one.
+pub fn tool_manifest(package_manager: &PackageManager, tool_manager: &ToolManager) -> String {
+    format!("[tools]\n{}\n", pin_lines(package_manager, tool_manager))
 }
 
 /// Names of the supported entries, for flag validation and help.
@@ -249,9 +289,26 @@ pub fn other_manifests(chosen: &PackageManager) -> Vec<&'static str> {
         .collect()
 }
 
-/// Every tool a tool manager installs for this package manager.
-fn pins(package_manager: &PackageManager) -> impl Iterator<Item = &'static str> {
-    std::iter::once(ROJO).chain(package_manager.pins.iter().copied())
+/// One rendered line per pin, in the tool manager's format.
+fn pin_lines(package_manager: &PackageManager, tool_manager: &ToolManager) -> String {
+    if tool_manager.pin_line.is_empty() {
+        return String::new();
+    }
+    pins(package_manager, tool_manager)
+        .filter_map(pin_vars)
+        .map(|vars| template::fill(tool_manager.pin_line, &vars))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What this tool manager installs: Rojo, plus the package manager's own pins
+/// unless the tool manager is the package manager itself, which already has them.
+fn pins(
+    package_manager: &PackageManager,
+    tool_manager: &ToolManager,
+) -> impl Iterator<Item = &'static str> {
+    let own = tool_manager.manifest.is_empty();
+    std::iter::once(ROJO).chain(package_manager.pins.iter().copied().filter(move |_| !own))
 }
 
 /// Splits `alias=owner/repo@version` into alias, spec, repo and version placeholders.

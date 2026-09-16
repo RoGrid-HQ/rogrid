@@ -10,7 +10,7 @@ environment = "shared"
 RoGrid = { name = "rogrid/rogrid", version = "^0.1.0" }
 
 [tools]
-rojo = "{{rojo_pin}}"
+{{tool_lines}}
 
 [scripts]
 serve = "rojo serve"
