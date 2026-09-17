@@ -57,7 +57,7 @@ pub fn run(
         let folder = path.strip_prefix(&cwd).unwrap_or(&path);
         println!("  cd {}", folder.display());
     }
-    println!("  rojo serve");
+    println!("  rogrid dev");
 
     if failures.is_empty() {
         return Ok(());

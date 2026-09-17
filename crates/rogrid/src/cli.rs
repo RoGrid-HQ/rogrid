@@ -37,6 +37,12 @@ pub enum Command {
         #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::TOOL_MANAGERS)))]
         tool_manager: Option<String>,
     },
+
+    /// Generate the client `api` and the input checks from `src/server/functions`.
+    Generate,
+
+    /// Run `rojo serve` and generate again whenever a request changes.
+    Dev,
 }
 
 /// Parses the command line. `rogrid help` also lists the tools `init` can set up.

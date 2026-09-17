@@ -36,11 +36,13 @@ project in Studio:
 ```sh
 cd my-game
 rojo plugin install
-rojo serve
+rogrid dev
 ```
 
-The plugin only needs installing once. Open a place in Studio, click Connect
-in the Rojo plugin, and the code in `src/` is in the game.
+The plugin only needs installing once. `rogrid dev` runs `rojo serve` for you
+and keeps RoGrid's generated code up to date while you work, so use it in place
+of `rojo serve`. Open a place in Studio, click Connect in the Rojo plugin, and
+the code in `src/` is in the game.
 
 ### In the current folder
 

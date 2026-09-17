@@ -8,6 +8,9 @@
       },
       "Packages": {
         "$path": { "optional": "{{packages_dir}}" }
+      },
+      "RoGrid": {
+        "$path": { "optional": ".rogrid/client" }
       }
     },
     "ServerScriptService": {
@@ -16,6 +19,9 @@
       },
       "ServerPackages": {
         "$path": { "optional": "{{server_packages_dir}}" }
+      },
+      "RoGrid": {
+        "$path": { "optional": ".rogrid/server" }
       }
     },
     "StarterPlayer": {
