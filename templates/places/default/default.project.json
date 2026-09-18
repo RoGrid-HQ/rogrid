@@ -3,6 +3,9 @@
   "tree": {
     "$className": "DataModel",
     "ReplicatedStorage": {
+      "RoGridGenerated": {
+        "$path": ".rogrid/generated/shared"
+      },
       "Shared": {
         "$path": "src/shared"
       },
@@ -11,6 +14,9 @@
       }
     },
     "ServerScriptService": {
+      "RoGridGenerated": {
+        "$path": ".rogrid/generated/server"
+      },
       "Server": {
         "$path": "src/server"
       },
@@ -20,6 +26,9 @@
     },
     "StarterPlayer": {
       "StarterPlayerScripts": {
+        "RoGridGenerated": {
+          "$path": ".rogrid/generated/client"
+        },
         "Client": {
           "$path": "src/client"
         }

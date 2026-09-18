@@ -11,4 +11,5 @@
 /build
 
 # Generated
+/.rogrid
 sourcemap.json

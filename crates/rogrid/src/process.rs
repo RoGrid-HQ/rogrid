@@ -49,7 +49,7 @@ pub fn works(command: &str, dir: &Path) -> bool {
 }
 
 /// PATH with `first` ahead of everything already on it. `None` leaves PATH alone.
-fn search_path(first: &[PathBuf]) -> Option<OsString> {
+pub fn search_path(first: &[PathBuf]) -> Option<OsString> {
     if first.is_empty() {
         return None;
     }

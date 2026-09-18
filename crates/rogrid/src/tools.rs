@@ -45,6 +45,8 @@ pub struct PackageManager {
     /// Where shared and server packages land, relative to the project root.
     pub packages: &'static str,
     pub server_packages: &'static str,
+    /// Dependency entry used by the package manager's project template.
+    pub rogrid_dependency: &'static str,
     /// Extra folders for `.gitignore`.
     pub ignores: &'static [&'static str],
     /// Tools a separate tool manager must install for this manager, as `alias=owner/repo@version`.
@@ -59,6 +61,7 @@ pub const PACKAGE_MANAGERS: &[PackageManager] = &[PackageManager {
     bin_dir: ".pesde/bin",
     packages: "roblox_packages",
     server_packages: "roblox_server_packages",
+    rogrid_dependency: r#"rogrid = { name = "rogrid/rogrid", version = "=0.2.0" }"#,
     ignores: &["/.pesde", "/lune_packages", "/luau_packages"],
     pins: &[
         "pesde=pesde-pkg/pesde@0.7.4+registry.0.2.3",
@@ -71,8 +74,7 @@ pub struct ToolManager {
     pub name: &'static str,
     pub binary: Option<&'static str>,
     pub homepage: &'static str,
-    /// File written into the project. Empty when the tools go into the package
-    /// manager's own manifest instead, through its `{{tool_lines}}` placeholder.
+    /// File written into the project. Empty when no separate tool manifest is needed.
     pub manifest: &'static str,
     /// One line per pinned tool. Placeholders: alias, spec, repo, version.
     pub pin_line: &'static str,
@@ -94,7 +96,7 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         binary: Some("pesde"),
         homepage: "https://docs.pesde.dev/installation",
         manifest: "",
-        pin_line: r#"{{alias}} = { name = "pesde/{{alias}}", version = "={{version}}", target = "lune" }"#,
+        pin_line: "",
         install: &[],
     },
     ToolManager {
@@ -146,22 +148,17 @@ impl Tool for ToolManager {
 
 /// Placeholder values for template files and install commands.
 /// `package_name` is the project name made safe for manifests, which do not allow dashes.
+/// Local framework setups omit both the registry dependency and released CLI pin.
 pub fn vars(
     project_name: &str,
     package_manager: &PackageManager,
     tool_manager: &ToolManager,
+    install_rogrid: bool,
 ) -> Vec<(&'static str, String)> {
-    let pin_ids = pins(package_manager, tool_manager)
+    let pin_ids = pins(package_manager, tool_manager, install_rogrid)
         .filter_map(|pin| pin_var(pin, "repo"))
         .collect::<Vec<_>>()
         .join(" ");
-
-    // Only for tool managers that live inside the package manager's manifest.
-    let tool_lines = if tool_manager.manifest.is_empty() {
-        pin_lines(package_manager, tool_manager)
-    } else {
-        String::new()
-    };
 
     vec![
         ("project_name", project_name.to_string()),
@@ -173,13 +170,31 @@ pub fn vars(
         ),
         ("ignores", package_manager.ignores.join("\n")),
         ("pin_ids", pin_ids),
-        ("tool_lines", tool_lines),
+        (
+            "rojo_version",
+            pin_var(ROJO, "version").expect("ROJO must contain a version"),
+        ),
+        (
+            "rogrid_dependency",
+            if install_rogrid {
+                package_manager.rogrid_dependency.to_string()
+            } else {
+                "# RoGrid is mapped from local source in default.project.json.".to_string()
+            },
+        ),
     ]
 }
 
 /// The tool manager's own manifest file, for tool managers that have one.
-pub fn tool_manifest(package_manager: &PackageManager, tool_manager: &ToolManager) -> String {
-    format!("[tools]\n{}\n", pin_lines(package_manager, tool_manager))
+pub fn tool_manifest(
+    package_manager: &PackageManager,
+    tool_manager: &ToolManager,
+    install_rogrid: bool,
+) -> String {
+    format!(
+        "[tools]\n{}\n",
+        pin_lines(package_manager, tool_manager, install_rogrid)
+    )
 }
 
 /// Names of the supported entries, for flag validation and help.
@@ -197,11 +212,15 @@ pub fn find<T: Tool + Copy>(items: &[T], name: &str) -> Result<T> {
 }
 
 /// One rendered line per pin, in the tool manager's format.
-fn pin_lines(package_manager: &PackageManager, tool_manager: &ToolManager) -> String {
+fn pin_lines(
+    package_manager: &PackageManager,
+    tool_manager: &ToolManager,
+    install_rogrid: bool,
+) -> String {
     if tool_manager.pin_line.is_empty() {
         return String::new();
     }
-    pins(package_manager, tool_manager)
+    pins(package_manager, tool_manager, install_rogrid)
         .filter_map(pin_vars)
         .map(|vars| template::fill(tool_manager.pin_line, &vars))
         .collect::<Vec<_>>()
@@ -214,9 +233,12 @@ fn pin_lines(package_manager: &PackageManager, tool_manager: &ToolManager) -> St
 fn pins(
     package_manager: &PackageManager,
     tool_manager: &ToolManager,
+    install_rogrid: bool,
 ) -> impl Iterator<Item = &'static str> {
     let own = tool_manager.manifest.is_empty();
-    let extra = std::iter::once(ROGRID).chain(package_manager.pins.iter().copied());
+    let extra = std::iter::once(ROGRID)
+        .filter(move |_| install_rogrid)
+        .chain(package_manager.pins.iter().copied());
     std::iter::once(ROJO).chain(extra.filter(move |_| !own))
 }
 

@@ -1,0 +1,14 @@
+/.rogrid/
+/sourcemap.json
+/build/
+/roblox_packages/
+/roblox_server_packages/
+/lune_packages/
+/luau_packages/
+/.pesde/
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock

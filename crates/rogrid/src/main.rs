@@ -1,4 +1,5 @@
 mod cli;
+mod codegen;
 mod commands;
 mod process;
 mod template;
@@ -11,5 +12,6 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Init(args) => commands::init::run(args),
+        Command::Dev(args) => commands::dev::run(args),
     }
 }

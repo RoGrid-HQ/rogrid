@@ -1,0 +1,36 @@
+{
+  "name": "RoGrid Playground",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Packages": {
+        "$className": "Folder",
+        "rogrid": {
+          "$path": "../packages/rogrid/src"
+        }
+      },
+      "RoGridGenerated": {
+        "$path": ".rogrid/generated/shared"
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      },
+      "RoGridGenerated": {
+        "$path": ".rogrid/generated/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Client": {
+          "$path": "src/client"
+        },
+        "RoGridGenerated": {
+          "$path": ".rogrid/generated/client"
+        }
+      }
+    }
+  }
+}

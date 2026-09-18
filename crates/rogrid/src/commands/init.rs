@@ -1,5 +1,6 @@
 pub mod help;
 mod install;
+mod local_framework;
 mod prompt;
 
 use std::env;
@@ -9,9 +10,9 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::builder::PossibleValuesParser;
 
-use crate::process;
 use crate::template;
 use crate::tools::{self, Tool};
+use crate::{codegen, process};
 
 /// The flags and arguments of `rogrid init`.
 #[derive(clap::Args)]
@@ -32,9 +33,13 @@ pub struct Args {
     #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::PACKAGE_MANAGERS)))]
     pub package_manager: Option<String>,
 
-    /// Tool manager to use. Prompted for when omitted.
+    /// Tool manager to use. `none` skips tool-manager setup; package dependencies still install.
     #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::TOOL_MANAGERS)))]
     pub tool_manager: Option<String>,
+
+    /// Use a local RoGrid package folder instead of downloading the framework or CLI.
+    #[arg(long, value_name = "PATH")]
+    pub local_framework: Option<PathBuf>,
 }
 
 /// Each choice comes from its flag when given, otherwise from a prompt.
@@ -45,7 +50,12 @@ pub fn run(args: Args) -> Result<()> {
         force,
         package_manager,
         tool_manager,
+        local_framework,
     } = args;
+    let local_source = local_framework
+        .as_deref()
+        .map(local_framework::resolve_source)
+        .transpose()?;
     let cwd = env::current_dir().context("could not read the current directory")?;
     let (path, name) = resolve_target(&cwd, target, name, force)?;
 
@@ -59,11 +69,17 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     fs::create_dir_all(&path).with_context(|| format!("could not create {}", path.display()))?;
-    let vars = tools::vars(&name, &package_manager, &tool_manager);
+    let install_rogrid = local_source.is_none();
+    let vars = tools::vars(&name, &package_manager, &tool_manager, install_rogrid);
     template::render(&template::DEFAULT, &path, &vars)?;
+    if let Some(source) = &local_source {
+        local_framework::configure(&path, source)?;
+    }
+    codegen::prepare(&path)?;
+    codegen::invalidate(&path)?;
 
     if !tool_manager.manifest.is_empty() {
-        let manifest = tools::tool_manifest(&package_manager, &tool_manager);
+        let manifest = tools::tool_manifest(&package_manager, &tool_manager, install_rogrid);
         fs::write(path.join(tool_manager.manifest), manifest)
             .with_context(|| format!("could not write {}", tool_manager.manifest))?;
     }
@@ -78,6 +94,16 @@ pub fn run(args: Args) -> Result<()> {
         )
     })?;
 
+    // Package installation needs pesde's engine shims, but Rojo belongs to the
+    // chosen tool manager. Without a separate manager, use the Rojo dependency
+    // installed by the package manager.
+    let rojo_path = if tool_manager.manifest.is_empty() {
+        path_first.as_slice()
+    } else {
+        &[]
+    };
+    codegen::generate(&path, rojo_path)?;
+
     println!(
         "\nCreated {} ({} + {})",
         path.display(),
@@ -89,7 +115,13 @@ pub fn run(args: Args) -> Result<()> {
         let folder = path.strip_prefix(&cwd).unwrap_or(&path);
         println!("  cd {}", folder.display());
     }
-    println!("  rojo serve");
+    if let Some(source) = &local_source {
+        println!("  Run `dev` using the same local CLI you used for `init`.");
+        println!("\nFramework source: {}", source.display());
+        println!("Rojo uses this folder directly. Restart Studio Play after framework edits.");
+    } else {
+        println!("  rogrid dev");
+    }
 
     if !process::works("rojo --version", &path) {
         println!("\n{}", rojo_note(&package_manager, &tool_manager));
@@ -103,7 +135,7 @@ pub fn run(args: Args) -> Result<()> {
 fn rojo_note(package_manager: &tools::PackageManager, tool_manager: &tools::ToolManager) -> String {
     let headline = "Note: `rojo` does not run in this folder yet.";
 
-    if tool_manager.name == package_manager.name {
+    if tool_manager.manifest.is_empty() {
         let bin = package_manager.bin_path().map_or_else(
             || package_manager.bin_dir.to_string(),
             |p| p.display().to_string(),
@@ -111,12 +143,6 @@ fn rojo_note(package_manager: &tools::PackageManager, tool_manager: &tools::Tool
         return format!(
             "{headline}\n{} installed it in {bin}, but that folder is missing from PATH or another `rojo` comes first.\nPut {bin} first on PATH, then open a new terminal.",
             package_manager.name
-        );
-    }
-
-    if tool_manager.binary.is_none() {
-        return format!(
-            "{headline}\nWith no tool manager, install Rojo yourself: https://rojo.space/docs/v7/getting-started/installation/"
         );
     }
 

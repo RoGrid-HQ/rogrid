@@ -1,6 +1,6 @@
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::commands::init;
+use crate::commands::{dev, init};
 
 /// Scaffold and manage RoGrid projects for Roblox.
 #[derive(Parser)]
@@ -15,6 +15,8 @@ pub struct Cli {
 pub enum Command {
     /// Create a new RoGrid project in a new folder, or in the current one with `.`.
     Init(init::Args),
+    /// Generate typed event interfaces and watch the project with Rojo.
+    Dev(dev::Args),
 }
 
 /// Parses the command line. `rogrid help` also lists the tools `init` can set up.

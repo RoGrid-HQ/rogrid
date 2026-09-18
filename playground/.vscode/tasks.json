@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "RoGrid: develop playground",
+      "type": "process",
+      "command": "cargo",
+      "args": ["run", "--manifest-path", "../Cargo.toml", "-p", "rogrid", "--", "dev"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}
