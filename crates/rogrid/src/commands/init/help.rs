@@ -14,7 +14,6 @@ pub fn tools() -> String {
 fn list<T: Tool>(items: &[T]) -> String {
     items
         .iter()
-        .filter(|t| t.supported())
         .map(|t| {
             let status = match t.installed() {
                 Some(true) => "installed",

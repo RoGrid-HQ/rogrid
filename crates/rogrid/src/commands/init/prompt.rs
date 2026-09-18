@@ -33,13 +33,12 @@ pub fn text(message: &str, default: Option<&str>) -> Result<String> {
     Ok(prompt.prompt()?)
 }
 
-/// Asks the user to pick one supported tool. The cursor starts on the first installed one.
+/// Asks the user to pick a tool. The cursor starts on the first installed one.
 pub fn select<T: Tool + Copy>(message: &str, tools: &[T]) -> Result<T> {
     ensure_terminal(message)?;
 
     let rows: Vec<Row<T>> = tools
         .iter()
-        .filter(|tool| tool.supported())
         .map(|&tool| Row {
             tool,
             installed: tool.installed(),

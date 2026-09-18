@@ -11,14 +11,9 @@ pub static DEFAULT: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../templates/plac
 pub type Vars<'a> = [(&'a str, String)];
 
 /// Copies every file in `template` into `dest`, filling in placeholders.
-/// Paths listed in `skip` are left out.
-pub fn render(template: &Dir, dest: &Path, vars: &Vars, skip: &[&str]) -> Result<()> {
+pub fn render(template: &Dir, dest: &Path, vars: &Vars) -> Result<()> {
     for file in files(template) {
         let relative = file.path();
-        if skip.iter().any(|s| Path::new(s) == relative) {
-            continue;
-        }
-
         let target = dest.join(relative);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;

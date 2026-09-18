@@ -1,22 +1,51 @@
+pub mod help;
+mod install;
+mod prompt;
+
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use clap::builder::PossibleValuesParser;
 
-use crate::install;
-use crate::prompt;
+use crate::process;
 use crate::template;
 use crate::tools::{self, Tool};
 
+/// The flags and arguments of `rogrid init`.
+#[derive(clap::Args)]
+pub struct Args {
+    /// Folder to create, or `.` for the current folder. Prompted for when omitted.
+    #[arg(value_name = "FOLDER")]
+    pub target: Option<String>,
+
+    /// Project name. Defaults to the folder name; prompted for with `.`.
+    #[arg(long, value_name = "NAME")]
+    pub name: Option<String>,
+
+    /// Set up the project in a folder that is not empty, overwriting files it writes.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Package manager to use. Prompted for when omitted.
+    #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::PACKAGE_MANAGERS)))]
+    pub package_manager: Option<String>,
+
+    /// Tool manager to use. Prompted for when omitted.
+    #[arg(long, value_name = "NAME", value_parser = PossibleValuesParser::new(tools::names(tools::TOOL_MANAGERS)))]
+    pub tool_manager: Option<String>,
+}
+
 /// Each choice comes from its flag when given, otherwise from a prompt.
-pub fn run(
-    target: Option<String>,
-    name: Option<String>,
-    force: bool,
-    package_manager: Option<String>,
-    tool_manager: Option<String>,
-) -> Result<()> {
+pub fn run(args: Args) -> Result<()> {
+    let Args {
+        target,
+        name,
+        force,
+        package_manager,
+        tool_manager,
+    } = args;
     let cwd = env::current_dir().context("could not read the current directory")?;
     let (path, name) = resolve_target(&cwd, target, name, force)?;
 
@@ -24,17 +53,14 @@ pub fn run(
         Some(name) => tools::find(tools::PACKAGE_MANAGERS, &name)?,
         None => prompt::select("Package manager:", tools::PACKAGE_MANAGERS)?,
     };
-    let options = tools::tool_managers_for(&package_manager);
     let tool_manager = match tool_manager {
-        Some(name) => tools::find(&options, &name)?,
-        None if options.len() == 1 => options[0],
-        None => prompt::select("Tool manager:", &options)?,
+        Some(name) => tools::find(tools::TOOL_MANAGERS, &name)?,
+        None => prompt::select("Tool manager:", tools::TOOL_MANAGERS)?,
     };
 
     fs::create_dir_all(&path).with_context(|| format!("could not create {}", path.display()))?;
     let vars = tools::vars(&name, &package_manager, &tool_manager);
-    let skip = tools::other_manifests(&package_manager);
-    template::render(&template::DEFAULT, &path, &vars, &skip)?;
+    template::render(&template::DEFAULT, &path, &vars)?;
 
     if !tool_manager.manifest.is_empty() {
         let manifest = tools::tool_manifest(&package_manager, &tool_manager);
@@ -44,7 +70,13 @@ pub fn run(
 
     // Tool manager first: it puts the package manager on the PATH.
     let to_install: [&dyn Tool; 2] = [&tool_manager, &package_manager];
-    let failures = install::run_all(&to_install, &vars, &path);
+    let path_first: Vec<PathBuf> = package_manager.bin_path().into_iter().collect();
+    install::run_all(&to_install, &vars, &path, &path_first).with_context(|| {
+        format!(
+            "project files were created in {}, but installation is incomplete",
+            path.display()
+        )
+    })?;
 
     println!(
         "\nCreated {} ({} + {})",
@@ -59,15 +91,39 @@ pub fn run(
     }
     println!("  rojo serve");
 
-    if failures.is_empty() {
-        return Ok(());
+    if !process::works("rojo --version", &path) {
+        println!("\n{}", rojo_note(&package_manager, &tool_manager));
     }
 
-    println!("\nThese steps did not complete:");
-    for failure in &failures {
-        println!("  ✗ {}\n    {}", failure.command, failure.fix);
+    Ok(())
+}
+
+/// What to do when `rojo` does not run in the new project, which depends on
+/// who was meant to install it.
+fn rojo_note(package_manager: &tools::PackageManager, tool_manager: &tools::ToolManager) -> String {
+    let headline = "Note: `rojo` does not run in this folder yet.";
+
+    if tool_manager.name == package_manager.name {
+        let bin = package_manager.bin_path().map_or_else(
+            || package_manager.bin_dir.to_string(),
+            |p| p.display().to_string(),
+        );
+        return format!(
+            "{headline}\n{} installed it in {bin}, but that folder is missing from PATH or another `rojo` comes first.\nPut {bin} first on PATH, then open a new terminal.",
+            package_manager.name
+        );
     }
-    bail!("{} install step(s) failed", failures.len());
+
+    if tool_manager.binary.is_none() {
+        return format!(
+            "{headline}\nWith no tool manager, install Rojo yourself: https://rojo.space/docs/v7/getting-started/installation/"
+        );
+    }
+
+    format!(
+        "{headline}\nCheck that {} is set up: {}",
+        tool_manager.name, tool_manager.homepage
+    )
 }
 
 /// Where the project goes and what it is called. A folder that is not empty

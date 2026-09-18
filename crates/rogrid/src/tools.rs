@@ -1,9 +1,11 @@
 //! Everything `rogrid init` knows about package managers and tool managers.
-//! Add support for a new one by adding an entry to the matching list.
+
+use std::env;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::binaries;
+use crate::process;
 use crate::template;
 
 /// What both lists have in common, so the prompt and the installer can treat them alike.
@@ -13,14 +15,12 @@ pub trait Tool {
     fn binary(&self) -> Option<&'static str>;
     /// Where a user goes to install the tool itself.
     fn homepage(&self) -> &'static str;
-    /// Whether `rogrid init` can set this tool up today. Unsupported tools are not offered.
-    fn supported(&self) -> bool;
     /// Commands run in the project folder, in order. `{{placeholders}}` are filled first.
     fn install(&self) -> &'static [&'static str];
 
     /// Whether the binary is on the PATH. `None` when the tool has no binary.
     fn installed(&self) -> Option<bool> {
-        self.binary().map(binaries::is_installed)
+        self.binary().map(process::is_installed)
     }
 }
 
@@ -37,10 +37,11 @@ pub struct PackageManager {
     pub name: &'static str,
     pub binary: &'static str,
     pub homepage: &'static str,
-    pub supported: bool,
-    /// Template file copied only when this manager is chosen.
-    pub manifest: &'static str,
     pub install: &'static [&'static str],
+    /// Folder under the home directory holding the tools this manager installs.
+    /// Searched first while installing, so another tool manager's stand-in for
+    /// the same tool cannot take its place.
+    pub bin_dir: &'static str,
     /// Where shared and server packages land, relative to the project root.
     pub packages: &'static str,
     pub server_packages: &'static str,
@@ -50,56 +51,26 @@ pub struct PackageManager {
     pub pins: &'static [&'static str],
 }
 
-pub const PACKAGE_MANAGERS: &[PackageManager] = &[
-    PackageManager {
-        name: "wally",
-        binary: "wally",
-        homepage: "https://wally.run",
-        supported: false,
-        manifest: "wally.toml",
-        install: &["wally install"],
-        packages: "Packages",
-        server_packages: "ServerPackages",
-        ignores: &[],
-        pins: &["wally=UpliftGames/wally@0.3.2"],
-    },
-    PackageManager {
-        name: "pesde",
-        binary: "pesde",
-        homepage: "https://docs.pesde.dev/installation",
-        supported: true,
-        manifest: "pesde.toml",
-        install: &["pesde install"],
-        packages: "roblox_packages",
-        server_packages: "roblox_server_packages",
-        ignores: &["/.pesde", "/lune_packages", "/luau_packages"],
-        pins: &[
-            "pesde=pesde-pkg/pesde@0.7.4+registry.0.2.3",
-            "lune=lune-org/lune@0.10.5",
-        ],
-    },
-    PackageManager {
-        name: "ember",
-        binary: "embr",
-        homepage: "https://luaupm.com/docs/installation",
-        supported: false,
-        manifest: "ember.toml",
-        install: &["embr install"],
-        packages: "packages/shared",
-        server_packages: "packages/server",
-        ignores: &["/.ember-patch"],
-        pins: &[],
-    },
-];
+pub const PACKAGE_MANAGERS: &[PackageManager] = &[PackageManager {
+    name: "pesde",
+    binary: "pesde",
+    homepage: "https://docs.pesde.dev/installation",
+    install: &["pesde install"],
+    bin_dir: ".pesde/bin",
+    packages: "roblox_packages",
+    server_packages: "roblox_server_packages",
+    ignores: &["/.pesde", "/lune_packages", "/luau_packages"],
+    pins: &[
+        "pesde=pesde-pkg/pesde@0.7.4+registry.0.2.3",
+        "lune=lune-org/lune@0.10.5",
+    ],
+}];
 
 #[derive(Clone, Copy)]
 pub struct ToolManager {
     pub name: &'static str,
     pub binary: Option<&'static str>,
     pub homepage: &'static str,
-    pub supported: bool,
-    /// Package managers this can pair with. Empty means any.
-    pub only_with: &'static [&'static str],
     /// File written into the project. Empty when the tools go into the package
     /// manager's own manifest instead, through its `{{tool_lines}}` placeholder.
     pub manifest: &'static str,
@@ -113,75 +84,35 @@ pub const TOOL_MANAGERS: &[ToolManager] = &[
         name: "rokit",
         binary: Some("rokit"),
         homepage: "https://github.com/rojo-rbx/rokit",
-        supported: true,
-        only_with: &[],
         manifest: "rokit.toml",
         pin_line: r#"{{alias}} = "{{spec}}""#,
         install: &["rokit trust {{pin_ids}}", "rokit install"],
-    },
-    ToolManager {
-        name: "aftman",
-        binary: Some("aftman"),
-        homepage: "https://github.com/LPGhatguy/aftman",
-        supported: false,
-        only_with: &[],
-        manifest: "aftman.toml",
-        pin_line: r#"{{alias}} = "{{spec}}""#,
-        install: &["aftman trust {{pin_ids}}", "aftman install"],
-    },
-    ToolManager {
-        name: "foreman",
-        binary: Some("foreman"),
-        homepage: "https://github.com/Roblox/foreman",
-        supported: false,
-        only_with: &[],
-        manifest: "foreman.toml",
-        pin_line: r#"{{alias}} = { github = "{{repo}}", version = "{{version}}" }"#,
-        install: &["foreman install"],
-    },
-    ToolManager {
-        name: "mise",
-        binary: Some("mise"),
-        homepage: "https://mise.jdx.dev",
-        supported: false,
-        only_with: &[],
-        manifest: "mise.toml",
-        pin_line: r#""ubi:{{repo}}" = "{{version}}""#,
-        install: &["mise install"],
     },
     // Tools as dev dependencies from pesde's registry. `pesde install` handles them.
     ToolManager {
         name: "pesde",
         binary: Some("pesde"),
         homepage: "https://docs.pesde.dev/installation",
-        supported: true,
-        only_with: &["pesde"],
         manifest: "",
         pin_line: r#"{{alias}} = { name = "pesde/{{alias}}", version = "={{version}}", target = "lune" }"#,
-        install: &[],
-    },
-    // Ember pins tools in its own manifest. `embr install` handles them.
-    ToolManager {
-        name: "ember",
-        binary: Some("embr"),
-        homepage: "https://luaupm.com/docs/installation",
-        supported: false,
-        only_with: &["ember"],
-        manifest: "",
-        pin_line: r#"{{alias}} = "{{spec}}""#,
         install: &[],
     },
     ToolManager {
         name: "none",
         binary: None,
         homepage: "",
-        supported: true,
-        only_with: &[],
         manifest: "",
         pin_line: "",
         install: &[],
     },
 ];
+
+impl PackageManager {
+    /// The full path of `bin_dir`. `None` when the home directory is unknown.
+    pub fn bin_path(&self) -> Option<PathBuf> {
+        env::home_dir().map(|home| home.join(self.bin_dir))
+    }
+}
 
 impl Tool for PackageManager {
     fn name(&self) -> &'static str {
@@ -192,9 +123,6 @@ impl Tool for PackageManager {
     }
     fn homepage(&self) -> &'static str {
         self.homepage
-    }
-    fn supported(&self) -> bool {
-        self.supported
     }
     fn install(&self) -> &'static [&'static str] {
         self.install
@@ -211,22 +139,9 @@ impl Tool for ToolManager {
     fn homepage(&self) -> &'static str {
         self.homepage
     }
-    fn supported(&self) -> bool {
-        self.supported
-    }
     fn install(&self) -> &'static [&'static str] {
         self.install
     }
-}
-
-/// Supported tool managers that can pair with this package manager.
-pub fn tool_managers_for(package_manager: &PackageManager) -> Vec<ToolManager> {
-    TOOL_MANAGERS
-        .iter()
-        .filter(|tm| tm.supported)
-        .filter(|tm| tm.only_with.is_empty() || tm.only_with.contains(&package_manager.name))
-        .copied()
-        .collect()
 }
 
 /// Placeholder values for template files and install commands.
@@ -269,29 +184,16 @@ pub fn tool_manifest(package_manager: &PackageManager, tool_manager: &ToolManage
 
 /// Names of the supported entries, for flag validation and help.
 pub fn names<T: Tool>(items: &[T]) -> Vec<&'static str> {
-    items
-        .iter()
-        .filter(|t| t.supported())
-        .map(|t| t.name())
-        .collect()
+    items.iter().map(|t| t.name()).collect()
 }
 
 /// The supported entry with this name.
 pub fn find<T: Tool + Copy>(items: &[T], name: &str) -> Result<T> {
     items
         .iter()
-        .find(|t| t.supported() && t.name() == name)
+        .find(|t| t.name() == name)
         .copied()
         .with_context(|| format!("unknown tool `{name}`, expected one of {:?}", names(items)))
-}
-
-/// Manifest files belonging to the package managers that were not chosen.
-pub fn other_manifests(chosen: &PackageManager) -> Vec<&'static str> {
-    PACKAGE_MANAGERS
-        .iter()
-        .filter(|pm| pm.name != chosen.name)
-        .map(|pm| pm.manifest)
-        .collect()
 }
 
 /// One rendered line per pin, in the tool manager's format.
