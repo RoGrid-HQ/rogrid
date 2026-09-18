@@ -7,11 +7,11 @@ A framework for building Roblox games in Luau, with a CLI that sets up a
 project the way `create-next-app` does for Next.js: one command, a few
 questions, and you are in Studio.
 
-> **Status:** early development. This checkout adds generated, typed events in
-> both directions. It has not been released yet. Expect breaking changes until 1.0.
-> Use the [local playground](playground/README.md) to try this checkout without
-> publishing. Its starter template targets the upcoming Luau package `0.2.0`,
-> which must be published before new projects can install it from the registry.
+> **Status:** early development. CLI `0.3.0` and Luau package `0.2.0` provide
+> generated, typed events in both directions. Expect breaking changes until 1.0.
+> Use the [local playground](playground/README.md) to develop without publishing.
+> The starter template requires Luau package `0.2.0` in the registry; publish
+> the package before releasing CLI `0.3.0`.
 
 ## Installation
 
@@ -283,14 +283,14 @@ To try it from another folder without installing it:
 cargo run --manifest-path path/to/rogrid/Cargo.toml -- init my-game
 ```
 
-When using this unreleased checkout, also run its CLI for `dev`:
+When developing from this checkout, also run its CLI for `dev`:
 
 ```sh
 cargo run --manifest-path path/to/rogrid/Cargo.toml -- dev
 ```
 
-The generated project may pin an already released CLI version; that binary
-will not have the new command until this implementation is released.
+Use `--local-framework` before the checkout's CLI version is released. It omits
+the registry dependency and CLI pin so installation does not require a release.
 
 `cargo fmt`, `cargo clippy` and a release build run on every push for Linux,
 macOS and Windows.

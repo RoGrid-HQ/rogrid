@@ -64,6 +64,6 @@ sourcemaps, downloaded dependencies, and local Studio place files are ignored.
 Keep this example small and aligned with the starter template.
 
 This playground exercises the local source. It does not verify the published
-package's contents or package-manager installation. The starter template now
-targets the upcoming Luau package `0.2.0`; that package must be published before
+package's contents or package-manager installation. The starter template
+targets Luau package `0.2.0`; that package must be published before
 normal generated projects can install it from the registry.

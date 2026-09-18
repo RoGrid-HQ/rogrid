@@ -8,6 +8,7 @@ repository = "https://github.com/RoGrid-HQ/rogrid"
 includes = [
   "pesde.toml",
   "LICENSE",
+  "README.md",
   "docs/**/*.md",
   "src/**/*.luau",
 ]
