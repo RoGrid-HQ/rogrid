@@ -26,13 +26,89 @@ connect a RemoteEvent; the CLI must generate the project's event code.
   passing a function reference, or computing the returned table is unsupported.
 - Annotate every parameter. A server handler's first parameter must be
   `Player`; it is supplied by Roblox rather than sent in the payload.
-- Payload types are exactly `string`, `boolean`, and `number`. Aliases,
-  optional types, unions, tables, Instances, and variadic arguments are unsupported.
+- Use the explicit [payload types](#payload-types) below. Variadic arguments
+  and unvalidated types such as `any` are unsupported.
 - A handler can have at most 16 payload arguments, excluding the server's
   first `Player`. Generic handlers are unsupported.
 - Event names and parameter names must be unique within their respective
   table or handler. Parameter names `self` and those beginning `_rogrid` are reserved.
 - Omit the return annotation or use `()`. Events do not return a reply.
+
+## Payload types
+
+| Type | Examples |
+| --- | --- |
+| Primitives | `string`, `number`, `boolean`, `buffer`, `nil` |
+| Optional values | `string?`, `{Vector3}?` |
+| Dense arrays | `{Vector3}` or `{[number]: Vector3}` |
+| String dictionaries | `{[string]: number}` |
+| Records | `{id: string, count: number, note: string?}` |
+| Literals and unions | `"equip"`, `false`, `string \| number`, `{kind: "equip", id: string} \| {kind: "clear"}` |
+| Instance references | `Instance`, `Model`, `BasePart`, `TextLabel`, and known Roblox subclasses |
+| Enum values | `EnumItem`, `Enum.Material`, `Enum.Font`, and known enum families |
+| Geometry | `Vector2`, `Vector3`, `Vector2int16`, `Vector3int16`, `CFrame`, `UDim`, `UDim2`, `Rect`, `Ray`, `Region3`, `Region3int16` |
+| Appearance and other values | `Color3`, `BrickColor`, `Font`, `NumberRange`, `NumberSequence`, `NumberSequenceKeypoint`, `ColorSequence`, `ColorSequenceKeypoint`, `DateTime`, `Axes`, `Faces`, `PhysicalProperties` |
+
+These rules concern network payloads only. They do not limit types in ordinary
+game code or future framework features.
+
+Tables may nest. Arrays must be dense, with no nil elements or extra keys;
+`{T?}` is a generation error, including through aliases. Use `{T}?` to make the
+whole array optional. Dictionaries accept only string keys. Records reject
+unknown fields, even though Luau's structural typing permits wider tables.
+Pass the declared fields explicitly when sending part of a larger object.
+
+Instances cross as references to objects visible to the receiver. RoGrid does
+not clone Models, replicate client-created Instances, or transfer a UI tree.
+Roblox may deliver an invisible reference as nil; a required Instance is then
+rejected. Class checks do not verify ownership or location. See Roblox's
+[remote argument limitations](https://create.roblox.com/docs/scripting/events/remote#argument-limitations).
+
+### Aliases
+
+Use non-generic, non-recursive aliases at module top level:
+
+```luau
+type Item = {id: string, position: Vector3?}
+
+return {
+    equip = RoGrid.event(function(player: Player, item: Item, note: string?)
+        -- Check ownership here.
+    end),
+}
+```
+
+Shared modules can declare `export type Item = ...`. Import them with a static
+top-level require, then annotate `Types.Item`:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Types = require(ReplicatedStorage.Shared.Types)
+```
+
+The generator follows Rojo mappings for `game`/`script` paths, dot or string
+indexing, `GetService`, `WaitForChild` (including a timeout), and `FindFirstChild`
+without recursive search. Static locals can hold intermediate paths. String
+requires support `./`, `../`, `@self/`, and `@game/`, following Roblox Instance
+names from the sourcemap, including renamed modules. See the
+[Roblox require rules](https://create.roblox.com/docs/reference/engine/globals/LuaGlobals#require).
+Imported files must remain inside the project, outside `.git` and `.rogrid`.
+Do not rebind import/path locals
+or shadow `require`, `game`, or `script`. Imported aliases must be exported.
+Aliases expand into concrete caller types, so callers do not import server modules.
+Shared and transitive type edits change the generated revision.
+
+Unsupported: generic or recursive aliases, computed `typeof` types,
+intersections, read/write type modifiers, type packs, functions, threads, signals, arbitrary userdata,
+`any`, `unknown`, and untyped `table`. Tables cannot combine record fields and
+an indexer, use metatables, or contain cycles. Engine types outside the list,
+such as `TweenInfo`, `RaycastResult`, and raycast/overlap parameters, need an
+explicit record containing the data you want to send. Alias names must not
+shadow built-in payload types. Record names and import paths must be UTF-8;
+payload strings can contain arbitrary bytes.
+
+Generation allows at most 32 levels of nesting/alias expansion and 4096
+expanded schema nodes per event. These bounds prevent runaway schemas.
 
 ## RoGrid.start
 
@@ -99,16 +175,21 @@ Validation runs on the receiving side before the game handler:
 
 | Check | Limit or behavior |
 | --- | --- |
-| Argument count | Must exactly match the declaration. |
+| Argument count | Extra arguments are rejected. Omitted values are checked as nil, so trailing optional arguments may be omitted. |
 | Argument types | Must match each declared payload type. |
-| Numbers | Must be finite; NaN and infinities are rejected. |
+| Numbers | Must be finite, including numeric components of Roblox value types. |
 | Strings | At most 4096 bytes each. |
-| Client event rate | Per player, a burst of 60 with a refill of 60 per second, shared across all inbound events. |
+| Buffers | At most 65536 bytes each. |
+| Validation work | 4096 steps per message, shared by all arguments. Each value check, table key scan, union attempt, and sequence keypoint consumes work. |
 
-Invalid or excessive client messages are silently dropped by the server.
-The client warns about invalid server payloads and skips the handler.
-Rate limiting and type checks do not replace game-specific authorization
-or cooldowns.
+Invalid payloads are dropped before the handler runs. In Studio,
+invalid payloads warn with the event name and field path, at most once per
+second per event. For a union, the warning includes the first branch's failure.
+
+Roblox has already deserialized the message when validation runs. These limits
+bound validator work and accepted data; they do not cap incoming bandwidth.
+RoGrid does not impose an event rate limit. Game-specific rate limits,
+authorization, and cooldowns belong in your game code.
 
 Handler errors are logged on the receiving side with the event name and
 traceback. They are not returned to the sender. RoGrid does not cancel

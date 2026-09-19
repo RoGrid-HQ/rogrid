@@ -64,7 +64,7 @@ pub fn run(args: Args) -> Result<()> {
             .context("could not start rojo; install it and make it available on PATH")?,
     );
     println!(
-        "Watching configured event folders and project settings; restart Studio Play after edits. Ctrl+C stops Rojo."
+        "Watching project Luau sources and settings; restart Studio Play after edits. Ctrl+C stops Rojo."
     );
 
     loop {

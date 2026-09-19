@@ -9,7 +9,7 @@ local RoGrid = {}
 RoGrid.version = "0.2.2"
 
 -- Internal contract with generated code, including when loaded through a package linker.
-RoGrid._protocol = 2
+RoGrid._protocol = 3
 local runtime = script:WaitForChild("runtime", 10)
 assert(runtime and runtime:IsA("ModuleScript"), "RoGrid runtime is missing; reinstall the package")
 RoGrid._runtime = require(runtime)

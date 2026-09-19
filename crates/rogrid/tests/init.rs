@@ -4,6 +4,79 @@ use std::fs;
 
 use support::{Sandbox, failure, success, text};
 
+#[test]
+fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
+    use std::process::Command;
+    let sandbox = Sandbox::new();
+    sandbox.provide("wally");
+    sandbox.provide("rojo");
+    success(
+        sandbox
+            .command("wally", "none")
+            .arg("game")
+            .output()
+            .unwrap(),
+    );
+    let project = sandbox.work.join("game");
+    let shared = project.join("src/shared");
+    fs::create_dir_all(&shared).unwrap();
+    fs::write(
+        shared.join("Id.luau"),
+        "export type Id = string\nreturn {}\n",
+    )
+    .unwrap();
+    fs::write(shared.join("Types.luau"), "local T = require('./Id')\nexport type Item = {id: T.Id, position: Vector3?, flags: {[string]: boolean}}\nreturn {}\n").unwrap();
+    fs::write(project.join("src/server/events/Lobby.luau"), "local Types = require('@game/ReplicatedStorage/Shared/Types')\nreturn {setReady = RoGrid.event(function(player: Player, item: Types.Item, note: string?) end)}\n").unwrap();
+    let dev = || {
+        Command::new(env!("CARGO_BIN_EXE_rogrid"))
+            .current_dir(&project)
+            .env("PATH", &sandbox.bin)
+            .env("ROGRID_TEST_HOME", &sandbox.home)
+            .env("ROGRID_TEST_LOG", sandbox.root.path().join("commands.log"))
+            .args(["dev", "--once"])
+            .output()
+            .unwrap()
+    };
+    let revision = project.join(".rogrid/generated/shared/Revision.luau");
+    let callers = project.join(".rogrid/generated/shared/Server.luau");
+    let startup = project.join(".rogrid/generated/server/Start.luau");
+    assert!(success(dev()).contains("~ server.Lobby.setReady"));
+    assert!(text(&callers).contains("id: string"));
+    assert!(text(&startup).contains("dictionary = \"boolean\""));
+    let first = text(&revision);
+    success(dev());
+    assert_eq!(
+        text(&revision),
+        first,
+        "unchanged inputs must retain their revision"
+    );
+    fs::write(
+        shared.join("Id.luau"),
+        "export type Id = number\nreturn {}\n",
+    )
+    .unwrap();
+    assert!(success(dev()).contains("~ server.Lobby.setReady"));
+    assert!(text(&callers).contains("id: number"));
+    assert_ne!(
+        text(&revision),
+        first,
+        "transitive type edits must invalidate stale callers"
+    );
+    fs::remove_file(shared.join("Id.luau")).unwrap();
+    failure(dev(), "could not locate type module");
+    assert!(text(&revision).contains("generation is incomplete"));
+    fs::write(
+        shared.join("Id.luau"),
+        "export type Id = number\nreturn {}\n",
+    )
+    .unwrap();
+    success(dev());
+    assert!(!text(&revision).contains("generation is incomplete"));
+    fs::write(shared.join("Id.luau"), "export type Id = any\nreturn {}\n").unwrap();
+    failure(dev(), "unsupported payload type any");
+    assert!(text(&revision).contains("generation is incomplete"));
+}
+
 fn initializes(pm: &str, tm: &str, local: bool) {
     let sandbox = Sandbox::new();
     if tm == "rokit" {

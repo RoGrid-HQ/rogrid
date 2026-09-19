@@ -40,7 +40,21 @@ fn main() {
         }
         ("wally", "install") => {}
         ("rojo", "sourcemap default.project.json") => {
-            print!("{}", include_str!("sourcemap.json"));
+            match env::var_os("ROGRID_TEST_SOURCEMAP") {
+                Some(path) => print!("{}", fs::read_to_string(path).unwrap()),
+                None => print!("{}", include_str!("sourcemap.json")),
+            }
+        }
+        ("rojo", "serve default.project.json") => {
+            let control = PathBuf::from(env::var_os("ROGRID_TEST_CONTROL").unwrap());
+            fs::write(control.join("rojo.pid"), std::process::id().to_string()).unwrap();
+            // The marker is outside the watched project. Tests choose the exit status.
+            loop {
+                if let Ok(status) = fs::read_to_string(control.join("rojo.exit")) {
+                    std::process::exit(status.trim().parse().unwrap());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
         _ => panic!("unexpected test tool command: {invocation}"),
     }

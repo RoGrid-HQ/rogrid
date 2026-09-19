@@ -1,0 +1,17 @@
+{
+  "name": "RoGrid payload tests",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "RoGrid": {"$path": "../src"},
+      "Native": {"$path": "native.luau"},
+      "Probe": {"$className": "RemoteEvent"},
+      "SharedModel": {"$className": "Model"}
+    },
+    "ServerScriptService": {"Tests": {"$path": "studio.server.luau"}},
+    "StarterPlayer": {"StarterPlayerScripts": {
+      "$className": "StarterPlayerScripts",
+      "Tests": {"$path": "studio.client.luau"}
+    }}
+  }
+}
