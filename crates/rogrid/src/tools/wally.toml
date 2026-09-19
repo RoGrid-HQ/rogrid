@@ -1,0 +1,13 @@
+[package]
+name = "local/{{package_name}}"
+version = "0.1.0"
+private = true
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[place]
+shared-packages = "game.ReplicatedStorage.Packages"
+server-packages = "game.ServerScriptService.ServerPackages"
+
+[dependencies]
+{{rogrid_dependency}}

@@ -1,0 +1,44 @@
+{
+  "name": "test-game",
+  "className": "DataModel",
+  "children": [
+    {
+      "name": "ServerScriptService",
+      "className": "ServerScriptService",
+      "children": [{
+        "name": "Server",
+        "className": "Folder",
+        "children": [{
+          "name": "events",
+          "className": "Folder",
+          "children": [{
+            "name": "Lobby",
+            "className": "ModuleScript",
+            "filePaths": ["src/server/events/Lobby.luau"]
+          }]
+        }]
+      }]
+    },
+    {
+      "name": "StarterPlayer",
+      "className": "StarterPlayer",
+      "children": [{
+        "name": "StarterPlayerScripts",
+        "className": "StarterPlayerScripts",
+        "children": [{
+          "name": "Client",
+          "className": "Folder",
+          "children": [{
+            "name": "events",
+            "className": "Folder",
+            "children": [{
+              "name": "Notifications",
+              "className": "ModuleScript",
+              "filePaths": ["src/client/events/Notifications.luau"]
+            }]
+          }]
+        }]
+      }]
+    }
+  ]
+}

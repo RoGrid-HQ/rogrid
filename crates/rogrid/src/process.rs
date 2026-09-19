@@ -33,14 +33,21 @@ pub fn run(command: &str, dir: &Path, path_first: &[PathBuf]) -> Result<()> {
 
 /// Whether a command runs and exits successfully in `dir`, with its output hidden.
 pub fn works(command: &str, dir: &Path) -> bool {
+    works_with_path(command, dir, &[])
+}
+
+pub fn works_with_path(command: &str, dir: &Path, path_first: &[PathBuf]) -> bool {
     let mut parts = command.split_whitespace();
     let Some(program) = parts.next() else {
         return false;
     };
 
-    Command::new(program)
-        .args(parts)
-        .current_dir(dir)
+    let mut process = Command::new(program);
+    process.args(parts).current_dir(dir);
+    if let Some(path) = search_path(path_first) {
+        process.env("PATH", path);
+    }
+    process
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use clap::builder::PossibleValuesParser;
 
 use crate::template;
-use crate::tools::{self, Tool};
+use crate::tools::{self, RojoFrom};
 use crate::{codegen, process};
 
 /// The flags and arguments of `rogrid init`.
@@ -65,44 +65,42 @@ pub fn run(args: Args) -> Result<()> {
     };
     let tool_manager = match tool_manager {
         Some(name) => tools::find(tools::TOOL_MANAGERS, &name)?,
-        None => prompt::select("Tool manager:", tools::TOOL_MANAGERS)?,
+        None => {
+            let supported: Vec<_> = tools::TOOL_MANAGERS
+                .iter()
+                .copied()
+                .filter(|tool| tool.supports(&package_manager))
+                .collect();
+            prompt::select("Tool manager:", &supported)?
+        }
     };
 
-    fs::create_dir_all(&path).with_context(|| format!("could not create {}", path.display()))?;
     let install_rogrid = local_source.is_none();
-    let vars = tools::vars(&name, &package_manager, &tool_manager, install_rogrid);
-    template::render(&template::DEFAULT, &path, &vars)?;
+    let setup = tools::setup(&name, &package_manager, &tool_manager, install_rogrid)?;
+    // The target may not exist yet. Check externally supplied tools from the caller's folder.
+    preflight(&cwd, &package_manager, &tool_manager, &setup)?;
+    fs::create_dir_all(&path).with_context(|| format!("could not create {}", path.display()))?;
+    template::render(&template::DEFAULT, &path, &setup.vars)?;
+    for (file, contents) in &setup.files {
+        fs::write(path.join(file), contents).with_context(|| format!("could not write {file}"))?;
+    }
     if let Some(source) = &local_source {
         local_framework::configure(&path, source)?;
     }
     codegen::prepare(&path)?;
     codegen::invalidate(&path)?;
 
-    if !tool_manager.manifest.is_empty() {
-        let manifest = tools::tool_manifest(&package_manager, &tool_manager, install_rogrid);
-        fs::write(path.join(tool_manager.manifest), manifest)
-            .with_context(|| format!("could not write {}", tool_manager.manifest))?;
-    }
-
     // Tool manager first: it puts the package manager on the PATH.
-    let to_install: [&dyn Tool; 2] = [&tool_manager, &package_manager];
-    let path_first: Vec<PathBuf> = package_manager.bin_path().into_iter().collect();
-    install::run_all(&to_install, &vars, &path, &path_first).with_context(|| {
+    install::run_all(&setup.steps, &path, &setup.path_first).with_context(|| {
         format!(
             "project files were created in {}, but installation is incomplete",
             path.display()
         )
     })?;
 
-    // Package installation needs pesde's engine shims, but Rojo belongs to the
-    // chosen tool manager. Without a separate manager, use the Rojo dependency
-    // installed by the package manager.
-    let rojo_path = if tool_manager.manifest.is_empty() {
-        path_first.as_slice()
-    } else {
-        &[]
-    };
-    codegen::generate(&path, rojo_path)?;
+    codegen::generate(&path, setup.rojo_path()).with_context(|| {
+        format!("project files were created in {}, but code generation is incomplete; fix the error and run `rogrid dev --once` there", path.display())
+    })?;
 
     println!(
         "\nCreated {} ({} + {})",
@@ -124,7 +122,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     if !process::works("rojo --version", &path) {
-        println!("\n{}", rojo_note(&package_manager, &tool_manager));
+        println!("\n{}", rojo_note(&package_manager, &tool_manager, &setup));
     }
 
     Ok(())
@@ -132,24 +130,66 @@ pub fn run(args: Args) -> Result<()> {
 
 /// What to do when `rojo` does not run in the new project, which depends on
 /// who was meant to install it.
-fn rojo_note(package_manager: &tools::PackageManager, tool_manager: &tools::ToolManager) -> String {
+fn rojo_note(
+    package_manager: &tools::PackageManager,
+    tool_manager: &tools::ToolManager,
+    setup: &tools::Setup,
+) -> String {
     let headline = "Note: `rojo` does not run in this folder yet.";
 
-    if tool_manager.manifest.is_empty() {
-        let bin = package_manager.bin_path().map_or_else(
-            || package_manager.bin_dir.to_string(),
-            |p| p.display().to_string(),
-        );
-        return format!(
-            "{headline}\n{} installed it in {bin}, but that folder is missing from PATH or another `rojo` comes first.\nPut {bin} first on PATH, then open a new terminal.",
-            package_manager.name
+    match setup.rojo {
+        RojoFrom::PackageManager => {
+            let bin = package_manager.bin_path().map_or_else(
+                || {
+                    package_manager
+                        .bin_dir
+                        .unwrap_or("the package manager's binary directory")
+                        .to_string()
+                },
+                |p| p.display().to_string(),
+            );
+            format!(
+                "{headline}\n{} installed it in {bin}, but that folder is missing from PATH or another `rojo` comes first.\nPut {bin} first on PATH, then open a new terminal.",
+                package_manager.name
+            )
+        }
+        RojoFrom::ToolManager => format!(
+            "{headline}\nCheck that {} is set up: {}",
+            tool_manager.name, tool_manager.homepage
+        ),
+        RojoFrom::Path => format!(
+            "{headline}\nInstall Rojo and make it available on PATH: https://rojo.space/docs/v7/getting-started/installation/"
+        ),
+    }
+}
+
+/// Verify only tools that setup will not install itself.
+fn preflight(
+    dir: &Path,
+    pm: &tools::PackageManager,
+    tm: &tools::ToolManager,
+    setup: &tools::Setup,
+) -> Result<()> {
+    let (binary, homepage, search) = if tm.installs_tools {
+        (
+            tm.binary.context("tool manager has no executable")?,
+            tm.homepage,
+            &[][..],
+        )
+    } else {
+        (pm.binary, pm.homepage, setup.path_first.as_slice())
+    };
+    if !process::works_with_path(&format!("{binary} --version"), dir, search) {
+        bail!(
+            "`{binary} --version` failed. Install {binary} from {homepage} and make it available on PATH before running init"
         );
     }
-
-    format!(
-        "{headline}\nCheck that {} is set up: {}",
-        tool_manager.name, tool_manager.homepage
-    )
+    if setup.rojo == RojoFrom::Path && !process::works("rojo --version", dir) {
+        bail!(
+            "this setup requires Rojo on PATH; `rojo --version` failed. Install Rojo before running init: https://rojo.space/docs/v7/getting-started/installation/"
+        );
+    }
+    Ok(())
 }
 
 /// Where the project goes and what it is called. A folder that is not empty
@@ -248,4 +288,42 @@ fn ensure_available(path: &Path, force: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_folder_suggestions_without_changing_explicit_names() {
+        assert_eq!(normalize_name("My Game__ 2!"), Some("my-game__-2".into()));
+        assert_eq!(normalize_name("!!!"), None);
+        assert!(validate_name("my_game-v2").is_ok());
+        for name in ["", "../game", "my game", "Game", "a/b", "a\\b"] {
+            assert!(validate_name(name).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn resolves_current_folder_new_folder_and_name_only_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        for spelling in [".", "./"] {
+            let (path, name) = resolve_target(
+                dir.path(),
+                Some(spelling.into()),
+                Some("game".into()),
+                false,
+            )
+            .unwrap();
+            assert_eq!(path, dir.path());
+            assert_eq!(name, "game");
+        }
+        for target in [None, Some("game".into())] {
+            let (path, name) =
+                resolve_target(dir.path(), target, Some("game".into()), false).unwrap();
+            assert_eq!(path, dir.path().join("game"));
+            assert_eq!(name, "game");
+            assert!(!path.exists());
+        }
+    }
 }

@@ -1,44 +1,21 @@
+---
+sidebar_position: 2
+---
+
 # Events
 
-Declare the receiver on the side that runs it. The CLI generates the other
-side's typed caller. Nothing in a server receiver's implementation is copied
-into the shared client interface.
+Declare an event on the side that handles it. RoGrid generates a typed caller
+for the other side and connects the receiver to a RemoteEvent during startup.
+The examples below use the project from [getting started](./getting-started.md).
 
-## Declarations
+## Client to server
 
-By default, put plain ModuleScripts directly in `src/server/events/` and
-`src/client/events/`. Use names such as `Lobby.luau`, not `init.luau` or
-`Lobby.server.luau`. Use valid Luau identifiers for module names.
-
-Override the folders with an optional `rogrid.toml` at the project root:
-
-```toml
-[events]
-server = ["src/server/events", "src/server/cooler_events"]
-client = ["src/client/events"]
-```
-
-Lists replace defaults; omitted sides keep defaults, and an empty list disables
-that side. Every listed folder must exist inside the project. Paths are relative
-to the project root; parent traversal and absolute paths are not accepted.
-Unknown configuration keys and duplicate folder entries are errors. Only direct
-module files are loaded; subfolders are ignored unless separately listed.
-Module filenames must be unique across all folders on each side. Duplicate
-names report both source files. Folder names do not appear in the caller API.
-
-Your Rojo project must map every receiver to exactly one ModuleScript. The CLI
-asks Rojo for a fresh sourcemap during generation and uses the mapped instance
-names, including renamed folders and modules. Server receivers must be under
-ServerScriptService or ServerStorage, so their implementation stays private.
-Client receivers may be under StarterPlayerScripts (resolved through the local
-player's PlayerScripts at runtime) or ReplicatedStorage. Other locations, such
-as streamed Workspace content or StarterCharacterScripts, are not supported.
-
-Each module must end with one literal returned table:
+Create a receiver in the server events folder:
 
 ```luau
+-- src/server/events/Lobby.luau
 --!strict
-local RoGrid = require(game.ReplicatedStorage.Packages.rogrid)
+local RoGrid = require(game:GetService("ReplicatedStorage").Packages.rogrid)
 
 return {
     setReady = RoGrid.event(function(player: Player, ready: boolean)
@@ -47,123 +24,97 @@ return {
 }
 ```
 
-Declare every receiver directly as `RoGrid.event(function(...) ... end)`;
-aliases, separately defined callbacks, computed exports, and generic handlers
-are not part of the first version. Handler bodies can use ordinary Luau and
-require other game modules. Keep helper modules outside the events folder.
+The first parameter must be typed `Player`. Roblox supplies the actual sender;
+the client only supplies the remaining arguments.
 
-Every argument must have an explicit annotation. A server receiver's first
-argument must be `Player`, which Roblox supplies. All remaining arguments—and
-all client receiver arguments—must be `string`, `boolean`, or `number`.
-There are at most 16 payload arguments. Optional types, aliases, tables,
-Instances, unions, and variadic arguments are rejected during generation.
-`self` and names beginning `_rogrid` are reserved parameter names.
-
-Events have no response. Omit the handler's return annotation or use `()`.
-
-## Startup and calling
-
-The server template starts the framework once:
+With `rogrid dev` running, save the file. Call the generated function from
+client code after `RoGrid.start()` has returned:
 
 ```luau
---!strict
-local RoGrid = require(game:GetService("ReplicatedStorage").Packages.rogrid)
-RoGrid.start()
-```
-
-The client waits for its initial package before starting:
-
-```luau
---!strict
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Packages = ReplicatedStorage:WaitForChild("Packages")
-local RoGrid = require(Packages:WaitForChild("rogrid"))
-RoGrid.start()
-```
-
-RoGrid handles the remaining startup checks and follows the generated module
-locations. No folder list is repeated in Luau. The starter runs its optional
-`ReadyDemo` game module after startup; removing that call leaves only boot code.
-
-Startup loads the receiver modules and connects them to their RemoteEvents.
-Do not fire events at module top level while those modules are being loaded.
-Fire from handlers or after `RoGrid.start` has returned.
-
-Client callers:
-
-```luau
-local Server = require(game.ReplicatedStorage.RoGridGenerated.Server)
+local Server = require(game:GetService("ReplicatedStorage").RoGridGenerated.Server)
 Server.Lobby.setReady.fire(true)
 ```
 
-For a client module `Notifications.luau` exporting `show(message: string)`,
-the generated server callers are:
+`Lobby` comes from the module filename and `setReady` from the returned table
+field. The generated client interface contains no server handler implementation.
+
+## Server to client
+
+Create a receiver in the client events folder:
 
 ```luau
-local Client = require(game.ServerScriptService.RoGridGenerated.Client)
-Client.Notifications.show.fire(player, "Hello!")
-Client.Notifications.show.fireAll("Round starting!")
+-- src/client/events/Notifications.luau
+--!strict
+local RoGrid = require(game:GetService("ReplicatedStorage").Packages.rogrid)
+
+return {
+    show = RoGrid.event(function(message: string)
+        print(message)
+    end),
+}
 ```
 
-Event callers are plain functions: use a dot for `.fire(...)` and `.fireAll(...)`.
-Their argument hints show only the values you supply, including the target
-`player: Player` for a call to one client.
+Client receivers have no automatic `Player` parameter. From server code, send
+to one player or everyone:
 
-These functions return immediately after sending. A successful send is not an
-acknowledgment that the handler ran. In particular, notifications sent before a
-client finishes loading are not persistent state; the game must arrange when
-to send its initial state. This release does not add a readiness protocol.
+```luau
+local Client = require(game:GetService("ServerScriptService").RoGridGenerated.Client)
 
-## Validation and failures
+-- Inside a handler where player is the target Player:
+Client.Notifications.show.fire(player, "You are ready!")
 
-The generated receiver checks the exact number and types of payload arguments.
-Numbers must not be NaN or infinity. Strings are limited to 4096 bytes.
-Invalid inbound client messages are dropped before invoking game code.
+-- Broadcast to connected clients:
+Client.Notifications.show.fireAll("A new round is starting!")
+```
 
-The server also limits each player to a burst of 60 events, with tokens
-refilling at 60 per second across all events. This is a general abuse limit,
-not a replacement for a weapon cooldown or purchase authorization. The game
-still checks permission, ownership, range, and any other business rules.
+Use a dot for `.fire(...)` and `.fireAll(...)`. These are plain functions.
 
-Client receivers check server payloads too, logging invalid messages rather
-than running a handler with incorrect arguments. Handler errors are logged on
-the receiving side, with the event name and traceback. They are not sent back
-to the caller. Receivers should return promptly; RoGrid does not cancel a
-handler that yields indefinitely.
+## Declarations
 
-## Generation and the editor
+Event files are plain ModuleScripts directly inside an
+[event folder](./configuration.md#event-folders). Name them with Luau identifiers,
+such as `Lobby.luau`. Do not use `init.luau`, `.server.luau`, or `.client.luau`.
 
-Run `rogrid dev` while editing. It reads event declarations with a Luau parser,
-emits typed interfaces, and starts Rojo. Rojo must be available on PATH for
-sourcemap generation, including with `--once`. The CLI never executes receiver
-source on the development machine. Ctrl+C stops the watcher and its Rojo child
-process.
+Each module returns one literal table of named `RoGrid.event(function(...) ... end)`
+declarations. Use the local name `RoGrid` and inline functions so the generator
+can recognize them. Keep helper modules outside event folders; handlers can
+require helpers and use ordinary Luau.
 
-The watcher follows configured event folders and listens for `rogrid.toml` and
-`default.project.json` edits. It updates its watches when the lists change. It
-also notices nested Rojo project files within watched source trees. Restart
-`dev` after changing Rojo configuration files outside those trees. Bad config
-or missing folders invalidates generated startup until generation succeeds.
+Every parameter needs an explicit type. Payloads support `string`, `boolean`,
+and `number`, with at most 16 payload arguments per event. The automatic
+server `Player` does not count toward this limit. See the
+[API reference](./api.md#declaration-rules) for the complete rules.
 
-The output is owned by RoGrid under `.rogrid/generated/`. Unchanged files are
-not rewritten, and obsolete output files are removed. Invalid source marks
-the generation unusable for the next startup; saving a valid declaration
-regenerates it. Startup compares generated revisions to reject mismatched
-client/server/caller files.
+## Startup
 
-The CLI generates callers, validation, and startup code. The runtime comes
-from `ReplicatedStorage.Packages.rogrid`, installed through pesde in normal
-projects. Generated code checks the package protocol before using its internal
-runtime API. For local development, the repository playground maps this same
-package location directly to `packages/rogrid/src`; no publication is needed.
+The starter already calls `RoGrid.start()` once on the server and once on each
+client. It loads the receivers and connects their events. There is no folder
+list to repeat in your startup scripts.
 
-Use the Luau Language Server VS Code extension, `--!strict` in game modules,
-Rojo sourcemaps, and `luau-lsp.diagnostics.strictDatamodelTypes = true`.
-The starter configures these. Existing editor settings are preserved.
+Do not fire events at receiver module top level: those modules are loaded
+during startup. Fire inside handlers or after `RoGrid.start()` returns.
 
-Restart Studio Play after changes. Runtime module caches are not hot-reloaded.
-Run `rogrid dev --once` before `rojo build`; runtime cannot read erased Luau
-annotations to discover a source edit that was never generated.
+Events send messages without returning replies. Sending does not acknowledge
+that a handler ran. Messages sent before a client finishes loading are not
+persistent state; arrange your game's initial state exchange accordingly.
 
-No RemoteFunctions, promises, automatic retries, custom serialization, or
-UnreliableRemoteEvents are included in this version.
+## Validation
+
+Generated receivers check argument count, types, finite numbers, and string
+length. The server also applies a per-player rate limit across inbound events.
+Invalid or excessive client messages are dropped before the handler runs.
+
+These checks do not authorize game actions. Your handler still checks things
+such as ownership, range, purchase permissions, and gameplay cooldowns. See
+[runtime validation](./api.md#runtime-validation) for exact limits and error behavior.
+
+## Editing events
+
+`rogrid dev` regenerates callers when declarations change. It reports `+` for
+added events, `-` for removed events, and `~` for changed argument names or
+types. Handler-body edits do not appear in that report.
+
+Fix generation errors before starting Play. Restart Play after changes so
+Roblox reloads modules. For a place build, run `rogrid dev --once` first.
+Generated files under `.rogrid/generated/` are owned by RoGrid; edit the
+receiver source instead.

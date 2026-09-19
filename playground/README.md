@@ -6,7 +6,7 @@ the CLI or the Luau package. The CLI runs from this checkout, and Rojo maps
 There is no copied runtime to refresh and no package installation step.
 
 To have the CLI create a separate game with this same local framework, use
-[`init --local-framework`](../README.md#create-a-separate-game-with-the-local-framework).
+[`init --local-framework`](../packages/rogrid/docs/cli.md#local-framework).
 
 ## Start
 
@@ -40,7 +40,7 @@ Run Task → RoGrid: develop playground**.
 - Change event declarations under `src/` to try game events. The CLI regenerates
   callers automatically; Rojo syncs other game code without generation.
 - To use different or multiple event folders, add `rogrid.toml` with an `[events]`
-  section. See [folder configuration](../packages/rogrid/docs/events.md#declarations).
+  section. See [folder configuration](../packages/rogrid/docs/configuration.md#event-folders).
   The playground maps `src/server` and `src/client`, so folders beneath those
   roots are already included in its Rojo project. Both entry scripts simply
   call `RoGrid.start()` without repeating your folder choices.
@@ -64,6 +64,6 @@ sourcemaps, downloaded dependencies, and local Studio place files are ignored.
 Keep this example small and aligned with the starter template.
 
 This playground exercises the local source. It does not verify the published
-package's contents or package-manager installation. The starter template
-targets Luau package `0.2.0`; that package must be published before
-normal generated projects can install it from the registry.
+package's contents or package-manager installation. See
+[contributing](../CONTRIBUTING.md#writing-tests) for those checks and
+[project status](../packages/rogrid/docs/status.md) for release availability.
