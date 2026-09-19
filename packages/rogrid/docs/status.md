@@ -24,15 +24,16 @@ runtime protocol and generated revisions during startup.
 
 - Project initialization with package and tool manifests.
 - Typed client-to-server and server-to-client event callers.
-- Generated payload validation and a per-player inbound rate limit.
+- Payloads with Roblox values, Instance references, nested tables, optionals,
+  unions, and type aliases.
+- Generated payload validation.
 - Configurable event folders resolved through Rojo sourcemaps.
 - A development watcher and generation before place builds.
 - Local framework development without publishing packages.
 
 ## Current limitations
 
-Payloads support only `string`, `boolean`, and `number`. Events use ordinary
-RemoteEvents and have no request/reply API, custom serialization, automatic
+Events use ordinary RemoteEvents and have no request/reply API, custom serialization, automatic
 retries, or client readiness protocol. See the [API reference](./api.md) for
 declaration rules and runtime limits.
 

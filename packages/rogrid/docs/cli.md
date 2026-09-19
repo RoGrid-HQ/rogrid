@@ -90,8 +90,9 @@ be available on PATH, including for `--once`.
 | `--once` | Generate once without watching files or starting the Rojo server. |
 | `-h`, `--help` | Show command help. |
 
-Without `--once`, the command generates interfaces, watches configured event
-sources and project settings, and starts `rojo serve default.project.json`.
+Without `--once`, the command generates interfaces, watches project Luau
+sources (including shared type aliases) and project settings, and starts
+`rojo serve default.project.json`.
 Ctrl+C stops both the watcher and the Rojo process.
 
 Generation errors at startup exit the command. Errors while watching are

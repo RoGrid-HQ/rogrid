@@ -3,14 +3,12 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local validate = require(script.Parent.validate)
 
 type Handler = (...any) -> ()
-type Validator = (...any) -> boolean
-type Bucket = { tokens: number, updated: number }
 
 local Runtime = {}
 local remotes: { [string]: RemoteEvent } = {}
-local buckets: { [Player]: Bucket } = {}
 -- Receiver paths are selected by generated registration, so their return shape
 -- is checked below rather than inferred through a statically known require.
 local loadModule: (ModuleScript) -> any = require
@@ -18,23 +16,6 @@ local root: Folder? = nil
 local revision: string? = nil
 local side: string? = nil
 local started = false
-local RATE = 60 -- Per player, across all inbound events; game rules can be stricter.
-
-local function allowed(player: Player): boolean
-    local now = os.clock()
-    local bucket = buckets[player]
-    if not bucket then
-        bucket = { tokens = RATE, updated = now }
-        buckets[player] = bucket
-    end
-    bucket.tokens = math.min(RATE, bucket.tokens + (now - bucket.updated) * RATE)
-    bucket.updated = now
-    if bucket.tokens < 1 then
-        return false
-    end
-    bucket.tokens -= 1
-    return true
-end
 
 local function invoke(id: string, handler: Handler, ...: any): ()
     local ok, message = xpcall(handler :: (...any) -> any, debug.traceback, ...)
@@ -62,9 +43,6 @@ function Runtime.begin(destination: string, expected: string, ids: { string }): 
             remote.Parent = folder
             remotes[id] = remote
         end
-        Players.PlayerRemoving:Connect(function(player)
-            buckets[player] = nil
-        end)
     else
         local found = ReplicatedStorage:WaitForChild("RoGridEvents", 10)
         assert(found and found:IsA("Folder"), "RoGrid server did not start within 10 seconds")
@@ -110,22 +88,31 @@ function Runtime.load(location: { string }, names: { string }): { [string]: Hand
     return exports
 end
 
-function Runtime.bind(id: string, handler: Handler, validate: Validator): ()
+function Runtime.bind(id: string, handler: Handler, parameters: { validate.Parameter }): ()
     assert(not started, "RoGrid receivers must be registered during startup")
     assert(side ~= nil and string.sub(id, 1, #side + 1) == side .. ".", "RoGrid receiver is on the wrong side")
     local remote = remotes[id]
     assert(remote, `RoGrid event {id} is missing`)
+    local lastWarning = -math.huge
+    local function accepted(...: any): boolean
+        local message = validate(parameters, ...)
+        if message == nil then return true end
+        if RunService:IsStudio() and os.clock() - lastWarning >= 1 then
+            lastWarning = os.clock()
+            warn(`RoGrid dropped {id}: {message}`)
+        end
+        return false
+    end
     if side == "server" then
         remote.OnServerEvent:Connect(function(player: Player, ...: any)
-            if not started or not allowed(player) or not validate(...) then
+            if not started or not accepted(...) then
                 return
             end
             invoke(id, handler, player, ...)
         end)
     else
         remote.OnClientEvent:Connect(function(...: any)
-            if not validate(...) then
-                warn(`RoGrid server sent an invalid payload for {id}`)
+            if not accepted(...) then
                 return
             end
             invoke(id, handler, ...)

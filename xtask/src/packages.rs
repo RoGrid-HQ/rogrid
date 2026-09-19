@@ -81,6 +81,10 @@ impl Registry {
 
 const REGISTRIES: [Registry; 2] = [Registry::Pesde, Registry::Wally];
 
+#[cfg(test)]
+#[path = "packages_tests.rs"]
+mod workflow_tests;
+
 /// Public, unauthenticated downloads only. HTTP errors must not look like missing versions.
 fn download(url: &str, destination: &Path) -> Result<u16> {
     let status = output(

@@ -19,4 +19,7 @@ runs:
         install_tool UpliftGames/wally v0.3.2 wally-v0.3.2-linux.zip wally
         install_tool pesde-pkg/pesde v0.7.4+registry.0.2.3 pesde-0.7.4-linux-x86_64.zip pesde
         install_tool lune-org/lune v0.10.5 lune-0.10.5-linux-x86_64.zip lune
+        install_tool JohnnyMorganz/luau-lsp 1.69.0 luau-lsp-linux-x86_64.zip luau-lsp
+        curl -fsSL https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/1.69.0/scripts/globalTypes.d.luau -o "$tools_dir/roblox.d.luau"
+        echo "ROGRID_ROBLOX_DEFINITIONS=$tools_dir/roblox.d.luau" >> "$GITHUB_ENV"
         echo "$tools_dir" >> "$GITHUB_PATH"

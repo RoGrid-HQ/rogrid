@@ -80,8 +80,9 @@ declarations. Use the local name `RoGrid` and inline functions so the generator
 can recognize them. Keep helper modules outside event folders; handlers can
 require helpers and use ordinary Luau.
 
-Every parameter needs an explicit type. Payloads support `string`, `boolean`,
-and `number`, with at most 16 payload arguments per event. The automatic
+Every parameter needs an explicit type. Payloads support primitives,
+Roblox values and Instance references, records, arrays, dictionaries, optionals,
+unions, and local or imported aliases. There are at most 16 payload arguments per event. The automatic
 server `Player` does not count toward this limit. See the
 [API reference](./api.md#declaration-rules) for the complete rules.
 
@@ -100,9 +101,10 @@ persistent state; arrange your game's initial state exchange accordingly.
 
 ## Validation
 
-Generated receivers check argument count, types, finite numbers, and string
-length. The server also applies a per-player rate limit across inbound events.
-Invalid or excessive client messages are dropped before the handler runs.
+Generated descriptors drive a shared validator that checks argument types,
+nested shapes, finite components, sizes, and a per-message work limit.
+Invalid payloads are dropped before the handler runs. RoGrid does not impose
+an event rate limit.
 
 These checks do not authorize game actions. Your handler still checks things
 such as ownership, range, purchase permissions, and gameplay cooldowns. See

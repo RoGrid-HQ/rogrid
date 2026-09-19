@@ -3,6 +3,18 @@
   "className": "DataModel",
   "children": [
     {
+      "name": "ReplicatedStorage",
+      "className": "ReplicatedStorage",
+      "children": [{
+        "name": "Shared",
+        "className": "Folder",
+        "children": [
+          {"name": "Types", "className": "ModuleScript", "filePaths": ["src/shared/Types.luau"]},
+          {"name": "Id", "className": "ModuleScript", "filePaths": ["src/shared/Id.luau"]}
+        ]
+      }]
+    },
+    {
       "name": "ServerScriptService",
       "className": "ServerScriptService",
       "children": [{

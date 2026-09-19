@@ -3,7 +3,9 @@ mod discover;
 mod emit;
 mod parse;
 mod report;
+mod resolve;
 mod sourcemap;
+mod types;
 
 pub use report::Report;
 
@@ -33,10 +35,7 @@ impl Side {
     }
 }
 
-pub struct Argument {
-    name: String,
-    ty: &'static str,
-}
+use types::Field as Argument;
 
 pub struct Event {
     name: String,
@@ -80,6 +79,9 @@ fn generate_inner(root: &Path, path_first: &[PathBuf]) -> Result<Report> {
     let mut digest = Sha256::new();
     digest.update(b"rogrid-events-v1\0");
     digest.update(include_str!("emit.rs"));
+    digest.update(include_str!("types.rs"));
+    digest.update(include_str!("resolve.rs"));
+    digest.update(include_str!("parse.rs"));
     let config = config::load(root)?;
     config.validate_folders(root)?;
     prepare(root)?;
@@ -224,4 +226,107 @@ pub fn configure(root: &Path) -> Result<()> {
         &(serde_json::to_string_pretty(settings)? + "\n"),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> (tempfile::TempDir, Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let project = json!({"name": "custom", "servePort": 9876, "tree": {
+            "$className": "DataModel",
+            "ReplicatedStorage": {"Shared": {"$path": "shared"}},
+            "ServerScriptService": {"$ignoreUnknownInstances": true},
+            "StarterPlayer": {"StarterPlayerScripts": {"$path": "client"}}
+        }});
+        fs::write(
+            dir.path().join("default.project.json"),
+            serde_json::to_string(&project).unwrap(),
+        )
+        .unwrap();
+        (dir, project)
+    }
+
+    #[test]
+    fn configuration_adds_only_generated_mappings_and_preserves_editor_jsonc() {
+        let (dir, original) = project();
+        fs::create_dir(dir.path().join(".vscode")).unwrap();
+        let settings = "{ // user settings\n\"editor.tabSize\": 2,\n}\n";
+        fs::write(dir.path().join(".vscode/settings.json"), settings).unwrap();
+        configure(dir.path()).unwrap();
+        let mut updated: Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("default.project.json")).unwrap(),
+        )
+        .unwrap();
+        for parent in [
+            "/tree/ReplicatedStorage",
+            "/tree/ServerScriptService",
+            "/tree/StarterPlayer/StarterPlayerScripts",
+        ] {
+            assert!(
+                updated
+                    .pointer_mut(parent)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("RoGridGenerated")
+                    .is_some()
+            );
+        }
+        assert_eq!(updated, original);
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".vscode/settings.json")).unwrap(),
+            settings
+        );
+        let before = fs::read(dir.path().join("default.project.json")).unwrap();
+        configure(dir.path()).unwrap();
+        assert_eq!(
+            fs::read(dir.path().join("default.project.json")).unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn configuration_refuses_conflicting_mappings_or_missing_service_nodes_without_writes() {
+        for pointer in [
+            "/tree/ReplicatedStorage",
+            "/tree/ServerScriptService",
+            "/tree/StarterPlayer/StarterPlayerScripts",
+        ] {
+            for replacement in [
+                json!({"RoGridGenerated": {"$path": "my-files"}}),
+                json!(null),
+            ] {
+                let (dir, mut original) = project();
+                *original.pointer_mut(pointer).unwrap() = replacement;
+                let source = serde_json::to_string(&original).unwrap();
+                fs::write(dir.path().join("default.project.json"), &source).unwrap();
+                assert!(configure(dir.path()).is_err());
+                assert_eq!(
+                    fs::read_to_string(dir.path().join("default.project.json")).unwrap(),
+                    source
+                );
+                assert!(!dir.path().join(".vscode").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn missing_editor_settings_receive_documented_defaults() {
+        let (dir, _) = project();
+        prepare(dir.path()).unwrap();
+        let settings: Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join(".vscode/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settings["luau-lsp.platform.type"], "roblox");
+        assert_eq!(
+            settings["luau-lsp.sourcemap.rojoProjectFile"],
+            "default.project.json"
+        );
+        for side in ["shared", "server", "client"] {
+            assert!(dir.path().join(OUTPUT).join(side).is_dir());
+        }
+    }
 }

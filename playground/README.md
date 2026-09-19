@@ -38,7 +38,8 @@ Run Task → RoGrid: develop playground**.
 ## Editing
 
 - Change event declarations under `src/` to try game events. The CLI regenerates
-  callers automatically; Rojo syncs other game code without generation.
+  callers automatically. It also watches other project Luau sources so shared
+  type edits regenerate callers. Rojo syncs the game code.
 - To use different or multiple event folders, add `rogrid.toml` with an `[events]`
   section. See [folder configuration](../packages/rogrid/docs/configuration.md#event-folders).
   The playground maps `src/server` and `src/client`, so folders beneath those

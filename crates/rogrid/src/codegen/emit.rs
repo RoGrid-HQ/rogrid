@@ -13,7 +13,7 @@ assert(packages, "RoGrid packages are missing; install project dependencies")
 local library = packages:WaitForChild("rogrid", 10)
 assert(library and library:IsA("ModuleScript"), "RoGrid package is missing; install project dependencies")
 local RoGrid = require(library)
-assert(RoGrid._protocol == 2, "RoGrid CLI and package are incompatible; update them together and regenerate")
+assert(RoGrid._protocol == 3, "RoGrid CLI and package are incompatible; use matching code and regenerate")
 local _rogridRuntime = RoGrid._runtime
 local revisionModule = Generated:WaitForChild("Revision", 10)
 assert(revisionModule and revisionModule:IsA("ModuleScript"), "RoGrid revision is missing")
@@ -117,7 +117,7 @@ fn startup(modules: &[Module], side: Side, revision: &str) -> String {
             module
                 .location
                 .iter()
-                .map(|name| format!("{name:?}"))
+                .map(|name| super::types::quote(name))
                 .collect::<Vec<_>>()
                 .join(", "),
             module
@@ -131,49 +131,72 @@ fn startup(modules: &[Module], side: Side, revision: &str) -> String {
         for event in &module.events {
             writeln!(
                 code,
-                "\t_rogridRuntime.bind(\"{}\", receiver{index}.{}, function(...: any): boolean",
+                "\t_rogridRuntime.bind(\"{}\", receiver{index}.{}, {{",
                 id(module, event),
                 event.name
             )
             .unwrap();
-            writeln!(
-                code,
-                "\t\tif select(\"#\", ...) ~= {} then return false end",
-                event.args.len()
-            )
-            .unwrap();
-            if !event.args.is_empty() {
+            for argument in &event.args {
                 writeln!(
                     code,
-                    "\t\tlocal {} = ...",
-                    (1..=event.args.len())
-                        .map(|i| format!("p{i}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "\t\t{{ name = {}, shape = {} }},",
+                    super::types::quote(&argument.name),
+                    argument.ty.descriptor()
                 )
                 .unwrap();
             }
-            for (index, argument) in event.args.iter().enumerate() {
-                let p = format!("p{}", index + 1);
-                writeln!(
-                    code,
-                    "\t\tif typeof({p}) ~= \"{}\" then return false end",
-                    argument.ty
-                )
-                .unwrap();
-                match argument.ty {
-                    "number" => writeln!(
-                        code,
-                        "\t\tif {p} ~= {p} or math.abs({p}) == math.huge then return false end"
-                    )
-                    .unwrap(),
-                    "string" => writeln!(code, "\t\tif #{p} > 4096 then return false end").unwrap(),
-                    _ => {}
-                }
-            }
-            writeln!(code, "\t\treturn true\n\tend)").unwrap();
+            writeln!(code, "\t}})").unwrap();
         }
     }
     writeln!(code, "\t_rogridRuntime.finish()\nend").unwrap();
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, path::Path, process::Command};
+
+    #[test]
+    #[ignore = "requires Lune on PATH; executes generated startup and compatibility guards"]
+    fn generated_startup_and_compatibility_guards_execute() {
+        let modules = vec![
+            Module {
+                side: Side::Server,
+                name: "Tests".into(),
+                location: vec!["ServerStorage".into(), "Tests".into()],
+                events: vec![Event {
+                    name: "receive".into(),
+                    args: vec![],
+                }],
+            },
+            Module {
+                side: Side::Client,
+                name: "Tests".into(),
+                location: vec!["PlayerScripts".into(), "Tests".into()],
+                events: vec![Event {
+                    name: "receive".into(),
+                    args: vec![],
+                }],
+            },
+        ];
+        let mut generated = files(&modules, "test");
+        generated.insert("shared/Revision.luau".into(), "return 'test'\n".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("generated.json");
+        fs::write(&path, serde_json::to_string(&generated).unwrap()).unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let output = Command::new("lune")
+            .current_dir(repo)
+            .args(["run", "packages/rogrid/tests/generated.luau"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

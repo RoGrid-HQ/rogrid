@@ -64,3 +64,48 @@ impl fmt::Display for Report {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_additions_removals_and_signature_changes_in_name_order() {
+        let before = Inventory::from([
+            ("server.Shop.buy".into(), "id: string".into()),
+            ("server.Shop.sell".into(), "id: string".into()),
+            ("server.Lobby.ready".into(), "ready: boolean".into()),
+        ]);
+        let after = Inventory::from([
+            ("client.Notice.show".into(), "message: string".into()),
+            ("server.Shop.buy".into(), "id: number".into()),
+            ("server.Lobby.ready".into(), "ready: boolean".into()),
+        ]);
+        assert_eq!(
+            Report::between(&before, &after).to_string(),
+            "Generated 3 typed events.\n  + client.Notice.show\n  ~ server.Shop.buy\n  - server.Shop.sell"
+        );
+        assert_eq!(
+            Report::between(&after, &after).to_string(),
+            "Generated 3 typed events."
+        );
+    }
+
+    #[test]
+    fn reports_empty_and_single_event_inventories() {
+        let empty = Inventory::new();
+        let one = Inventory::from([("server.Lobby.ready".into(), String::new())]);
+        assert_eq!(
+            Report::between(&empty, &empty).to_string(),
+            "Generated 0 typed events."
+        );
+        assert_eq!(
+            Report::between(&empty, &one).to_string(),
+            "Generated 1 typed event.\n  + server.Lobby.ready"
+        );
+        assert_eq!(
+            Report::between(&one, &empty).to_string(),
+            "Generated 0 typed events.\n  - server.Lobby.ready"
+        );
+    }
+}

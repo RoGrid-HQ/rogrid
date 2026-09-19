@@ -21,9 +21,11 @@ client = ["src/client/events"]
 Each list replaces that side's defaults. An omitted side keeps its default;
 an empty list, such as `client = []`, disables discovery for that side.
 
-Folders must exist inside the project. Use project-relative paths without
-`.` or `..` components and keep them outside `.git` and `.rogrid`. Unknown
-configuration keys and duplicate folders are errors.
+Folders must exist inside the project. Use project-relative paths without a
+leading `./` or any `..` components, and keep them outside `.git` and `.rogrid`.
+Redundant `.` components within a path are accepted: `src/./events` resolves
+to the same folder as `src/events`. Unknown configuration keys and duplicate
+folders are errors.
 
 Only direct `.luau` and `.lua` module files are discovered. List subfolders
 separately if needed. Module names must be unique across all folders on each
@@ -93,10 +95,10 @@ absent. `rogrid init --force` overwrites starter files, including editor setting
 
 ## Watching changes
 
-`rogrid dev` watches configured event folders, `rogrid.toml`, and
-`default.project.json`. It updates its watches when event folder lists change
-and notices nested Rojo project files inside watched source trees. Restart
-the command after changing Rojo configuration files outside those trees.
+`rogrid dev` watches project Luau sources, event folders, `rogrid.toml`, and
+Rojo project files. This includes shared type modules and the creation or
+removal of imports. Changes under `.rogrid` and `.git` are ignored.
+Imports outside the project root are unsupported.
 
 Invalid configuration or source blocks generation and marks generated startup
 unusable until generation succeeds. Fix the error and save again, then restart

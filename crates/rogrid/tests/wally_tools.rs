@@ -41,6 +41,11 @@ fn local_wally_project_generates_and_builds_with_real_tools() {
     let revision =
         fs::read_to_string(project.join(".rogrid/generated/shared/Revision.luau")).unwrap();
     assert!(!revision.contains("invalid"));
+    // Exercise real Rojo instance-path imports and richer generated callers.
+    fs::write(project.join("src/server/Types.luau"), "export type Item = {id: string, position: Vector3?, flags: {[string]: boolean}, mode: 'equip' | 'clear'}\nreturn {}\n").unwrap();
+    let lobby = project.join("src/server/events/Lobby.luau");
+    let source = fs::read_to_string(&lobby).unwrap();
+    fs::write(&lobby, source.replace("return {", "local Types = require(script.Parent.Parent.Types)\nreturn {\n    equip = RoGrid.event(function(player: Player, item: Types.Item, note: string?) end),")).unwrap();
     success(
         Command::new(env!("CARGO_BIN_EXE_rogrid"))
             .current_dir(&project)
@@ -103,6 +108,7 @@ fn library_packages_with_a_module_entrypoint_and_runtime_child() {
         "default.project.json",
         "src/init.luau",
         "src/runtime.luau",
+        "src/validate.luau",
         "LICENSE",
     ] {
         assert!(
@@ -115,6 +121,7 @@ fn library_packages_with_a_module_entrypoint_and_runtime_child() {
     }
     assert!(!files.contains("pesde.toml"));
     assert!(!files.contains("pesde.lock"));
+    assert!(!files.contains("tests/"));
     success(
         Command::new("wally")
             .current_dir(&package)

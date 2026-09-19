@@ -1,0 +1,2 @@
+# Repository test tooling; game starters keep their own tool manifests.
+lune = "lune-org/lune@0.10.5"

@@ -59,8 +59,19 @@ Run `rogrid dev --once` successfully, reconnect Rojo if needed, and restart
 Play. Check the generated mappings in `default.project.json` and the installed
 runtime at `ReplicatedStorage.Packages.rogrid`.
 
-An incompatible runtime requires matching CLI and runtime versions. Running
-generation does not update installed packages. See [release availability](./status.md#release-availability).
+Generated code and the runtime must use the same internal protocol. Install a
+compatible CLI/runtime pair, regenerate, and restart Play. Running generation
+does not update installed packages. For framework development, use the same
+checkout's CLI and runtime through `--local-framework` or the playground.
+
+## A payload is dropped
+
+In Studio, check Output for `RoGrid dropped` followed by the event and field
+path. Verify required fields, array density, and the
+[payload rules and limits](./api.md#runtime-validation). Records reject extra
+fields even when Luau accepts the wider table type. Instance references must
+be visible to the receiver. Repeated warnings are throttled to once per second
+per event.
 
 ## Caller types are missing in the editor
 
