@@ -6,7 +6,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local RoGrid = {}
 
-RoGrid.version = "0.2.1"
+RoGrid.version = "0.2.2"
 
 -- Internal contract with generated code, including when loaded through a package linker.
 RoGrid._protocol = 2
