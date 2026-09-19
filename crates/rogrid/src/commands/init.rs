@@ -14,6 +14,10 @@ use crate::template;
 use crate::tools::{self, RojoFrom};
 use crate::{codegen, process};
 
+// Exact top-level names allowed without --force. Only add entries that project
+// generation leaves untouched; this list does not merge existing files.
+const ALLOWED_EXISTING_ENTRIES: &[&str] = &[".git"];
+
 /// The flags and arguments of `rogrid init`.
 #[derive(clap::Args)]
 pub struct Args {
@@ -25,7 +29,7 @@ pub struct Args {
     #[arg(long, value_name = "NAME")]
     pub name: Option<String>,
 
-    /// Set up the project in a folder that is not empty, overwriting files it writes.
+    /// Allow existing project files, overwriting files written by the starter.
     #[arg(long)]
     pub force: bool,
 
@@ -192,8 +196,8 @@ fn preflight(
     Ok(())
 }
 
-/// Where the project goes and what it is called. A folder that is not empty
-/// is refused as soon as it is known, before any prompt, unless `force` is set.
+/// Where the project goes and what it is called. Existing entries outside the
+/// allowlist are refused before any prompt, unless `force` is set.
 ///
 /// `.` means the current folder, with the name prompted for and the folder's
 /// own name suggested. Otherwise the target is a new folder under the current
@@ -272,19 +276,27 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refuses a folder that already has something in it, unless `force` is set.
+/// Refuses existing entries outside the allowlist, unless `force` is set.
 fn ensure_available(path: &Path, force: bool) -> Result<()> {
     if force || !path.exists() {
         return Ok(());
     }
 
-    let mut entries =
+    let entries =
         fs::read_dir(path).with_context(|| format!("could not read {}", path.display()))?;
-    if entries.next().is_some() {
-        bail!(
-            "{} is not empty; pass --force to set up the project in it anyway",
-            path.display()
-        );
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("could not read an entry in {}", path.display()))?;
+        let allowed = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| ALLOWED_EXISTING_ENTRIES.contains(&name));
+        if !allowed {
+            bail!(
+                "{} is not empty; pass --force to set up the project in it anyway",
+                path.display()
+            );
+        }
     }
 
     Ok(())
@@ -293,6 +305,43 @@ fn ensure_available(path: &Path, force: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allows_existing_git_files_and_directories() {
+        for is_directory in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let git = dir.path().join(".git");
+            if is_directory {
+                fs::create_dir(&git).unwrap();
+                fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            } else {
+                fs::write(&git, "gitdir: ../worktree-metadata\n").unwrap();
+            }
+            ensure_available(dir.path(), false).unwrap();
+        }
+    }
+
+    #[test]
+    fn git_metadata_does_not_allow_other_existing_entries() {
+        for (name, is_directory) in [
+            (".gitignore", false),
+            ("README.md", false),
+            (".github", true),
+            ("src", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join(".git")).unwrap();
+            let other = dir.path().join(name);
+            if is_directory {
+                fs::create_dir(other).unwrap();
+            } else {
+                fs::write(other, "existing file").unwrap();
+            }
+            let error = ensure_available(dir.path(), false).unwrap_err();
+            assert!(error.to_string().contains("is not empty"), "{name}");
+            ensure_available(dir.path(), true).unwrap();
+        }
+    }
 
     #[test]
     fn normalizes_folder_suggestions_without_changing_explicit_names() {
