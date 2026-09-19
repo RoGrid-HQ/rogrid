@@ -368,7 +368,7 @@ mod tests {
                 if released {
                     assert_eq!(
                         manifest["dependencies"]["rogrid"]["version"].as_str(),
-                        Some("=0.2.1")
+                        Some(format!("={FRAMEWORK_VERSION}").as_str())
                     );
                 }
                 assert_eq!(

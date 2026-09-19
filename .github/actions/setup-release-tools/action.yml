@@ -1,0 +1,22 @@
+name: Release tools
+description: Install the pinned Linux tools used by package checks and publishing.
+runs:
+  using: composite
+  steps:
+    - name: Install tools
+      shell: bash
+      run: |
+        set -euo pipefail
+        tools_dir="$RUNNER_TEMP/rogrid-tools"
+        mkdir -p "$tools_dir"
+        install_tool() {
+          local repo="$1" tag="$2" asset="$3" binary="$4"
+          gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tools_dir" --clobber
+          unzip -o -j "$tools_dir/$asset" "$binary" -d "$tools_dir"
+          chmod +x "$tools_dir/$binary"
+        }
+        install_tool rojo-rbx/rojo v7.7.0 rojo-7.7.0-linux-x86_64.zip rojo
+        install_tool UpliftGames/wally v0.3.2 wally-v0.3.2-linux.zip wally
+        install_tool pesde-pkg/pesde v0.7.4+registry.0.2.3 pesde-0.7.4-linux-x86_64.zip pesde
+        install_tool lune-org/lune v0.10.5 lune-0.10.5-linux-x86_64.zip lune
+        echo "$tools_dir" >> "$GITHUB_PATH"

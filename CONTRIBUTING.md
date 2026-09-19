@@ -13,6 +13,7 @@ Breaking changes can occur in any release.
 | `packages/rogrid/docs/` | User guides and reference documentation. |
 | `templates/places/default/` | Starter game embedded in the CLI. |
 | `playground/` | Game that uses the local CLI and runtime source. |
+| `xtask/` | Maintainer commands for version updates and release verification. |
 
 ## Local development
 
@@ -97,3 +98,12 @@ Document behavior that exists and distinguish source-only features from
 published releases. Keep [project status](packages/rogrid/docs/status.md)
 current when releasing. Do not use em dashes or promise that breaking changes
 end at a particular version.
+
+## Releases
+
+Maintainers use **Prepare release**, review and merge its PR after CI passes,
+then run **Publish release** with that PR number. Publishing repeats checks on
+the exact merged commit before uploading anything.
+
+See the [release guide](.github/RELEASING.md) for publishing, local version
+updates, and retrying failed releases.

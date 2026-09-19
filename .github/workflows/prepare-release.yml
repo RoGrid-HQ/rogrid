@@ -1,0 +1,89 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli:
+        description: CLI version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      runtime:
+        description: Runtime version bump (keep for CLI-only changes)
+        type: choice
+        options: [keep, patch, minor, major]
+        default: keep
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.repository == 'RoGrid-HQ/rogrid' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'JustSammyyy' &&
+      github.triggering_actor == 'JustSammyyy'
+    runs-on: ubuntu-24.04
+    environment: release-preparation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Check for an existing release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          count=$(gh pr list --base main --state open --json headRefName --jq '[.[] | select(.headRefName | startswith("release/"))] | length')
+          test "$count" = 0 || { echo "An open release PR already exists. Finish or close it first."; exit 1; }
+      - name: Prepare versions and notes
+        env:
+          CLI_BUMP: ${{ inputs.cli }}
+          RUNTIME_BUMP: ${{ inputs.runtime }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous=$(gh release view --json tagName --jq .tagName)
+          cargo xtask release prepare --cli "$CLI_BUMP" --runtime "$RUNTIME_BUMP" --since "$previous"
+      - name: Check the prepared changes before opening a PR
+        run: |
+          set -euo pipefail
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          version=$(cargo xtask release info | jq -r .cli)
+          branch="release/v$version"
+          bot_id=$(gh api "users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          gh auth setup-git
+          git switch -c "$branch"
+          git add crates/rogrid/Cargo.toml Cargo.lock packages/rogrid/pesde.toml packages/rogrid/pesde.lock packages/rogrid/wally.toml packages/rogrid/src/init.luau crates/rogrid/src/tools/mod.rs "releases/v$version.md"
+          git commit -m "Prepare CLI $version release"
+          git push origin "$branch"
+          pr=$(gh pr create --base main --head "$branch" --title "Release CLI $version" --body-file "releases/v$version.md")
+          printf 'Release PR: %s\n\nReview the notes and wait for all CI checks before merging. Then run **Publish release** with the PR number.\n' "$pr" >> "$GITHUB_STEP_SUMMARY"
