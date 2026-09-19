@@ -294,5 +294,14 @@ fn verification_timeout_rejects_a_success_exit_without_a_published_package() {
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("could not be verified after publishing")
     );
-    assert!(!f.log().contains(&"publish wally".into()));
+    let log = f.log();
+    let published = log.iter().position(|line| line == "publish pesde").unwrap();
+    assert_eq!(
+        log[published + 1..]
+            .iter()
+            .filter(|line| line.as_str() == "check pesde")
+            .count(),
+        config::REGISTRY_VERIFY_ATTEMPTS
+    );
+    assert!(!log.contains(&"publish wally".into()));
 }

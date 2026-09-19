@@ -1,4 +1,9 @@
+use std::sync::LazyLock;
+
 use anyhow::{Result, ensure};
+use fancy_regex::Regex;
+
+use crate::config;
 
 use super::{Manifest, PackageManager};
 
@@ -22,16 +27,12 @@ pub const PACKAGE_MANAGER: PackageManager = PackageManager {
 };
 
 fn package_name(name: &str) -> Result<String> {
+    static RULE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(config::WALLY_PACKAGE_NAME)
+            .expect("invalid Wally package-name regex in config.rs")
+    });
     let name = name.replace('_', "-");
-    ensure!(
-        (1..=64).contains(&name.len()),
-        "Wally package names must be 1–64 characters long"
-    );
-    ensure!(
-        name.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
-        "Wally package names may only contain lowercase letters, digits and dashes"
-    );
+    ensure!(RULE.is_match(&name)?, config::WALLY_PACKAGE_NAME_ERROR);
     Ok(name)
 }
 
@@ -41,11 +42,48 @@ mod tests {
 
     #[test]
     fn normalizes_and_validates_manifest_names() {
-        assert_eq!(package_name("my_game-v2").unwrap(), "my-game-v2");
-        assert!(package_name("123").is_ok());
-        assert!(package_name(&"a".repeat(64)).is_ok());
-        for name in ["", "Game", "a/b", &"a".repeat(65)] {
-            assert!(package_name(name).is_err(), "{name}");
+        for (input, expected) in [
+            ("a", "a"),
+            ("0", "0"),
+            ("123", "123"),
+            ("my_game-v2", "my-game-v2"),
+            ("-", "-"),
+            ("_", "-"),
+            ("_game_", "-game-"),
+            ("a__b", "a--b"),
+        ] {
+            assert_eq!(package_name(input).unwrap(), expected);
+        }
+        for name in [
+            "",
+            "Game",
+            "a/b",
+            "a.b",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\n",
+            "\na",
+            "a\r\n",
+            "a\0b",
+            "café",
+            "１２３",
+        ] {
+            assert_eq!(
+                package_name(name).unwrap_err().to_string(),
+                config::WALLY_PACKAGE_NAME_ERROR,
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_length_matches_the_registry_boundary() {
+        for (length, accepted) in [(63, true), (64, true), (65, false)] {
+            for character in ["a", "0", "-", "_"] {
+                let name = character.repeat(length);
+                assert_eq!(package_name(&name).is_ok(), accepted, "{name:?}");
+            }
         }
     }
 }

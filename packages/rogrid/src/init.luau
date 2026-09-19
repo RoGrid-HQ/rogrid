@@ -10,8 +10,8 @@ RoGrid.version = "0.2.2"
 
 -- Internal contract with generated code, including when loaded through a package linker.
 RoGrid._protocol = 3
-local runtime = script:WaitForChild("runtime", 10)
-assert(runtime and runtime:IsA("ModuleScript"), "RoGrid runtime is missing; reinstall the package")
+local runtime = script:WaitForChild("runtime")
+assert(runtime:IsA("ModuleScript"), "RoGrid runtime must be a ModuleScript; reinstall the package")
 RoGrid._runtime = require(runtime)
 
 -- Mark an explicitly typed receiver for the generator. No runtime reflection.
@@ -25,18 +25,14 @@ function RoGrid.start(): ()
     if RunService:IsServer() then
         container = ServerScriptService
     else
-        local scripts = Players.LocalPlayer:WaitForChild("PlayerScripts", 10)
-        assert(scripts, "PlayerScripts is missing")
-        container = scripts
-        local shared = ReplicatedStorage:WaitForChild("RoGridGenerated", 10)
-        assert(shared, "RoGrid generated files are missing. Run rogrid dev before starting Play.")
-        local callers = shared:WaitForChild("Server", 10)
-        assert(callers and callers:IsA("ModuleScript"), "RoGrid callers are missing. Run rogrid dev.")
+        container = Players.LocalPlayer:WaitForChild("PlayerScripts")
+        local shared = ReplicatedStorage:WaitForChild("RoGridGenerated")
+        local callers = shared:WaitForChild("Server")
+        assert(callers:IsA("ModuleScript"), "RoGrid callers must be a ModuleScript. Run rogrid dev.")
     end
-    local generated = container:WaitForChild("RoGridGenerated", 10)
-    assert(generated, "RoGrid generated files are missing. Run rogrid dev before starting Play.")
-    local startup = generated:WaitForChild("Start", 10)
-    assert(startup and startup:IsA("ModuleScript"), "RoGrid startup is missing. Run rogrid dev.")
+    local generated = container:WaitForChild("RoGridGenerated")
+    local startup = generated:WaitForChild("Start")
+    assert(startup:IsA("ModuleScript"), "RoGrid startup must be a ModuleScript. Run rogrid dev.")
     local start = require(startup) :: () -> ()
     start()
 end

@@ -1,11 +1,11 @@
--- Minimal synchronous engine stand-ins for testing the real runtime's branches.
+-- Minimal engine stand-ins with cooperative waits for testing the real runtime.
 -- Network delivery and replication are exercised separately in Roblox Studio.
 local fs = require("@lune/fs")
 local luau = require("@lune/luau")
 local validate = require("../../src/validate")
 
 return function(server, studio)
-    local fixture = { warnings = {}, waits = {}, nodes = {}, sent = {}, now = 0 }
+    local fixture = { warnings = {}, nodes = {}, sent = {}, now = 0 }
     local function signal()
         local listeners = {}
         return {
@@ -23,8 +23,13 @@ return function(server, studio)
             return nil
         end
         function node:WaitForChild(childName, timeout)
-            table.insert(fixture.waits, { childName, timeout })
-            return self:FindFirstChild(childName)
+            local started = fixture.now
+            while true do
+                local child = self:FindFirstChild(childName)
+                if child then return child end
+                if timeout and fixture.now - started >= timeout then return nil end
+                coroutine.yield(self, childName)
+            end
         end
         function node:SetAttribute(key, value) self.attributes[key] = value end
         function node:GetAttribute(key) return self.attributes[key] end
@@ -39,6 +44,23 @@ return function(server, studio)
         end
         table.insert(fixture.nodes, node)
         return node
+    end
+    -- Advance a simulated clock past the old deadline while the object is absent.
+    -- Engine warnings themselves are covered by the Studio test.
+    function fixture.waiting(thread, parent, name)
+        for _, elapsed in { 0, 60 } do
+            fixture.now += elapsed
+            local ok, actualParent, actualName = coroutine.resume(thread)
+            assert(ok, actualParent)
+            assert(coroutine.status(thread) == "suspended" and actualParent == parent and actualName == name,
+                `expected to keep waiting for {name}`)
+        end
+    end
+    function fixture.completed(thread)
+        local ok, result = coroutine.resume(thread)
+        assert(ok, result)
+        assert(coroutine.status(thread) == "dead", "expected startup to finish")
+        return result
     end
     fixture.services = {}
     for _, name in { "Players", "ReplicatedStorage", "ServerStorage", "ServerScriptService" } do

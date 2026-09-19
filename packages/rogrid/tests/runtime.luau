@@ -52,18 +52,29 @@ test("conflicting existing remotes are rejected", function()
     rejects("already exists", function() f.runtime.begin("server", "test", ids) end)
 end)
 
-test("client startup detects missing remotes and generation mismatches", function()
-    for _, scenario in { "missing", "wrong folder", "revision", "missing remote", "wrong remote" } do
+test("client startup waits for late folders and remotes", function()
+    local f = fixture(false, true)
+    local startup = coroutine.create(function()
+        f.runtime.begin("client", "test", ids)
+        f.runtime.finish()
+        f.runtime.fireServer(ids[1], "test", 42)
+    end)
+    f.waiting(startup, f.services.ReplicatedStorage, "RoGridEvents")
+    local folder = f.published("test", {})
+    f.waiting(startup, folder, ids[1])
+    for _, id in ids do f.node("RemoteEvent", id, folder) end
+    f.completed(startup)
+    assert(#f.sent == 1 and f.sent[1].args[1] == 42)
+end)
+
+test("client startup detects wrong classes and generation mismatches", function()
+    for _, scenario in { "wrong folder", "revision", "wrong remote" } do
         local f = fixture(false, true)
-        if scenario ~= "missing" then
-            local folder = f.published(if scenario == "revision" then "old" else "test", ids)
-            if scenario == "wrong folder" then folder.ClassName = "Model" end
-            if scenario == "missing remote" then f.remote(ids[1]).Parent = nil end
-            if scenario == "wrong remote" then f.remote(ids[1]).ClassName = "Folder" end
-        end
-        local expected = if scenario == "revision" then "generation differs" elseif string.find(scenario, "remote") then "is missing" else "did not start within 10 seconds"
+        local folder = f.published(if scenario == "revision" then "old" else "test", ids)
+        if scenario == "wrong folder" then folder.ClassName = "Model" end
+        if scenario == "wrong remote" then f.remote(ids[1]).ClassName = "Folder" end
+        local expected = if scenario == "revision" then "generation differs" elseif scenario == "wrong remote" then "must be a RemoteEvent" else "must be a Folder"
         rejects(expected, function() f.runtime.begin("client", "test", ids) end)
-        for _, wait in f.waits do assert(wait[2] == 10) end
     end
 end)
 
@@ -121,6 +132,34 @@ test("invalid inbound payloads are dropped on both sides", function()
     end
 end)
 
+test("large valid payloads reach handlers on both sides", function()
+    local payload = {
+        heights = table.create(3000, 0),
+        text = string.rep("a", 8192),
+        bytes = buffer.create(131072),
+    }
+    local shape = { record = { heights = { array = "number" }, text = "string", bytes = "buffer" } }
+    for _, server in { true, false } do
+        local f = begun(server, true)
+        local id = if server then ids[1] else ids[3]
+        local received = {}
+        f.runtime.bind(id, function(...) table.insert(received, table.pack(...)) end, { { name = "payload", shape = shape } })
+        f.runtime.finish()
+        local function send(value)
+            if server then f.remote(id).OnServerEvent:fire(f.player, value) else f.remote(id).OnClientEvent:fire(value) end
+        end
+        send(payload)
+        assert(#received == 1 and #f.warnings == 0)
+        assert(received[1][if server then 2 else 1] == payload)
+        local invalid = table.clone(payload)
+        invalid.heights = table.clone(payload.heights)
+        invalid.heights[3000] = "wrong"
+        send(invalid)
+        assert(#received == 1 and #f.warnings == 1)
+        assert(string.find(f.warnings[1], "payload.heights[3000]: expected number", 1, true))
+    end
+end)
+
 test("valid bursts have no framework rate limit", function()
     local f = begun(true, true)
     local received = 0
@@ -130,20 +169,33 @@ test("valid bursts have no framework rate limit", function()
     assert(received == 200 and f.now == 0)
 end)
 
-test("Studio warnings are throttled independently per event", function()
-    local f = begun(true, true)
-    for _, id in { ids[1], ids[2] } do f.runtime.bind(id, function() error("invalid payload invoked handler") end, parameters) end
-    f.runtime.finish()
-    f.remote(ids[1]).OnServerEvent:fire(f.player, "wrong")
-    f.remote(ids[1]).OnServerEvent:fire(f.player, "wrong")
-    f.remote(ids[2]).OnServerEvent:fire(f.player, "wrong")
-    assert(#f.warnings == 2)
-    assert(string.find(f.warnings[1], "RoGrid dropped " .. ids[1], 1, true))
-    assert(string.find(f.warnings[1], "value", 1, true))
-    f.now = 0.99; f.remote(ids[1]).OnServerEvent:fire(f.player, "wrong")
-    assert(#f.warnings == 2)
-    f.now = 1; f.remote(ids[1]).OnServerEvent:fire(f.player, "wrong")
-    assert(#f.warnings == 3)
+test("Studio reports every invalid message including repeated and distinct errors", function()
+    local longField = string.rep("a", 63) .. "é_tail"
+    for _, server in { true, false } do
+        local f = begun(server, true)
+        local id = if server then ids[1] else ids[3]
+        local received = 0
+        f.runtime.bind(id, function() received += 1 end, {
+            { name = "item", shape = { record = { id = "string", count = "number", [longField] = { optional = "number" } } } },
+        })
+        f.runtime.finish()
+        local function send(item)
+            if server then f.remote(id).OnServerEvent:fire(f.player, item)
+            else f.remote(id).OnClientEvent:fire(item) end
+        end
+        for i, case in {
+            { { id = 1, count = 1 }, "item.id: expected string" },
+            { { id = 1, count = 1 }, "item.id: expected string" },
+            { { id = "ok", count = "wrong" }, "item.count: expected number" },
+            { { id = "ok", count = 1, [longField] = "wrong" }, "item." .. longField .. ": expected number" },
+        } do
+            send(case[1])
+            assert(#f.warnings == i and received == 0)
+            assert(f.warnings[i] == `RoGrid dropped {id}: {case[2]}`)
+        end
+        send({ id = "ok", count = 1 })
+        assert(received == 1 and #f.warnings == 4 and f.now == 0)
+    end
 end)
 
 test("production drops invalid payloads silently", function()
@@ -173,12 +225,31 @@ test("handler errors include the event and traceback and subsequent messages sti
     end
 end)
 
+test("receiver loading waits for each missing path component", function()
+    for _, server in { true, false } do
+        local f = fixture(server, true)
+        local root = if server then f.services.ServerStorage else f.playerScripts
+        local loading = coroutine.create(function()
+            return f.runtime.load({ if server then "ServerStorage" else "PlayerScripts", "Events", "Receiver" }, { "receive" })
+        end)
+        if not server then
+            f.playerScripts.Parent = nil
+            f.waiting(loading, f.player, "PlayerScripts")
+            f.playerScripts.Parent = f.player
+        end
+        f.waiting(loading, root, "Events")
+        local folder = f.node("Folder", "Events", root)
+        f.waiting(loading, folder, "Receiver")
+        f.node("ModuleScript", "Receiver", folder, "return {receive = function() return 42 end}")
+        assert(f.completed(loading).receive() == 42)
+    end
+end)
+
 test("receiver module paths and exports are checked", function()
     for _, server in { true, false } do
         local f = fixture(server, true)
         local root = if server then f.services.ServerStorage else f.playerScripts
         local location = { if server then "ServerStorage" else "PlayerScripts", "Events" }
-        rejects("receiver", function() f.runtime.load(location, { "receive" }) end)
         local module = f.node("Folder", "Events", root)
         rejects("must be a ModuleScript", function() f.runtime.load(location, { "receive" }) end)
         module.Parent = nil
@@ -199,29 +270,42 @@ test("receiver module paths and exports are checked", function()
     rejects("require a client", function() f.runtime.load({ "PlayerScripts", "Events" }, {}) end)
 end)
 
-test("public API preserves event handlers and diagnoses absent generated startup", function()
+test("public API preserves event handlers and waits for generated startup", function()
     for _, server in { true, false } do
         local f = fixture(server, true)
         local api = f.require(f.package)
         local handler = function(value) return value end
         assert(api.event(handler) == handler and api.event(handler)(42) == 42)
-        rejects("generated files are missing", api.start)
-        local shared = f.node("Folder", "RoGridGenerated", f.services.ReplicatedStorage)
+        local startup = coroutine.create(api.start)
         if not server then
-            rejects("callers are missing", api.start)
+            f.playerScripts.Parent = nil
+            f.waiting(startup, f.player, "PlayerScripts")
+            f.playerScripts.Parent = f.player
+            f.waiting(startup, f.services.ReplicatedStorage, "RoGridGenerated")
+            local shared = f.node("Folder", "RoGridGenerated", f.services.ReplicatedStorage)
+            f.waiting(startup, shared, "Server")
             f.node("ModuleScript", "Server", shared, "return {}")
         end
-        local generated = f.node("Folder", "RoGridGenerated", if server then f.services.ServerScriptService else f.playerScripts)
-        rejects("startup is missing", api.start)
-        f.node("ModuleScript", "Start", generated, "return function() error('startup was invoked') end")
-        rejects("startup was invoked", api.start)
+        local container = if server then f.services.ServerScriptService else f.playerScripts
+        f.waiting(startup, container, "RoGridGenerated")
+        local generated = f.node("Folder", "RoGridGenerated", container)
+        f.waiting(startup, generated, "Start")
+        local start = f.node("ModuleScript", "Start", generated, "return function() script:SetAttribute('started', true) end")
+        f.completed(startup)
+        assert(start:GetAttribute("started") == true)
     end
 end)
 
-test("package entrypoint diagnoses missing runtime", function()
+test("package entrypoint waits for runtime and checks its class", function()
     local f = fixture(true, true)
     f.runtimeModule.Parent = nil
-    rejects("runtime is missing", function() f.require(f.package) end)
+    local loading = coroutine.create(function() return f.require(f.package) end)
+    f.waiting(loading, f.package, "runtime")
+    f.runtimeModule.Parent = f.package
+    assert(f.completed(loading)._runtime == f.runtime)
+    f = fixture(true, true)
+    f.runtimeModule.ClassName = "Folder"
+    rejects("runtime must be a ModuleScript", function() f.require(f.package) end)
 end)
 
 print(`Runtime: {count} scenarios passed`)

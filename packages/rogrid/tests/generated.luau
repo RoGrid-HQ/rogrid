@@ -18,11 +18,34 @@ local function setup(server)
         local side, name = string.match(path, "^(%w+)/(%w+)%.luau$")
         f.node("ModuleScript", name, roots[side], source)
     end
-    f.node("ModuleScript", "Tests", f.services.ServerStorage, "return {receive = function() end}")
-    f.node("ModuleScript", "Tests", f.playerScripts, "return {receive = function() end}")
+    local receiverSource = [[
+        return {
+            receive = function() end,
+            wide = function(...)
+                local offset = if game:GetService("RunService"):IsServer() then 1 else 0
+                local value = select(1 + offset, ...)
+                for i = 1, 5000 do assert(value["f" .. i] == i) end
+                script:SetAttribute("WideCalls", (script:GetAttribute("WideCalls") or 0) + 1)
+            end,
+            deep = function(...)
+                local offset = if game:GetService("RunService"):IsServer() then 1 else 0
+                local value = select(1 + offset, ...)
+                for _ = 1, 128 do value = value.child end
+                assert(value == 42)
+                script:SetAttribute("DeepCalls", (script:GetAttribute("DeepCalls") or 0) + 1)
+            end,
+            many = function(...)
+                local offset = if game:GetService("RunService"):IsServer() then 1 else 0
+                assert(select("#", ...) == 32 + offset)
+                for i = 1, 32 do assert(select(i + offset, ...) == i) end
+                script:SetAttribute("Calls", (script:GetAttribute("Calls") or 0) + 1)
+            end,
+        }
+    ]]
+    f.receiver = f.node("ModuleScript", "Tests", if server then f.services.ServerStorage else f.playerScripts, receiverSource)
     f.api = f.require(f.package)
     f.caller = roots[if server then "server" else "shared"]:FindFirstChild(if server then "Client" else "Server")
-    if not server then f.published("test", { "server.Tests.receive", "client.Tests.receive" }) end
+    if not server then f.published("test", { "server.Tests.receive", "client.Tests.receive", "server.Tests.many", "client.Tests.many", "server.Tests.deep", "client.Tests.deep", "server.Tests.wide", "client.Tests.wide" }) end
     return f
 end
 local function rejects(expected, run)
@@ -44,19 +67,86 @@ for _, server in { true, false } do
         assert(f.sent[1].method == "FireServer" and f.sent[1].args.n == 0)
     end
     count += 1
+    local values = {}; for i = 1, 32 do values[i] = i end
+    local function assertSent(sent, offset)
+        assert(sent.args.n == 32 + offset)
+        for i = 1, 32 do assert(sent.args[i + offset] == i) end
+        if offset == 1 then assert(sent.args[1] == f.player) end
+    end
+    if server then
+        callers.Tests.many.fire(f.player, table.unpack(values))
+        callers.Tests.many.fireAll(table.unpack(values))
+        assertSent(f.sent[3], 1)
+        assertSent(f.sent[4], 0)
+    else
+        callers.Tests.many.fire(table.unpack(values))
+        assertSent(f.sent[2], 0)
+    end
+    local function inbound()
+        if server then f.remote("server.Tests.many").OnServerEvent:fire(f.player, table.unpack(values))
+        else f.remote("client.Tests.many").OnClientEvent:fire(table.unpack(values)) end
+    end
+    inbound()
+    assert(f.receiver:GetAttribute("Calls") == 1 and #f.warnings == 0)
+    values[32] = "wrong"
+    inbound()
+    assert(f.receiver:GetAttribute("Calls") == 1 and #f.warnings == 1)
+    assert(string.find(f.warnings[1], "p32: expected number", 1, true))
+    count += 1
+    local leaf = { child = 42 }
+    local nested = leaf
+    for _ = 2, 128 do nested = { child = nested } end
+    if server then callers.Tests.deep.fire(f.player, nested); callers.Tests.deep.fireAll(nested)
+    else callers.Tests.deep.fire(nested) end
+    local function inboundDeep()
+        if server then f.remote("server.Tests.deep").OnServerEvent:fire(f.player, nested)
+        else f.remote("client.Tests.deep").OnClientEvent:fire(nested) end
+    end
+    inboundDeep()
+    assert(f.receiver:GetAttribute("DeepCalls") == 1 and #f.warnings == 1)
+    leaf.child = "wrong"
+    inboundDeep()
+    assert(f.receiver:GetAttribute("DeepCalls") == 1 and #f.warnings == 2)
+    assert(string.find(f.warnings[2], "expected number", 1, true))
+    count += 1
+    local wide = {}; for i = 1, 5000 do wide["f" .. i] = i end
+    if server then callers.Tests.wide.fire(f.player, wide); callers.Tests.wide.fireAll(wide)
+    else callers.Tests.wide.fire(wide) end
+    local function inboundWide()
+        if server then f.remote("server.Tests.wide").OnServerEvent:fire(f.player, wide)
+        else f.remote("client.Tests.wide").OnClientEvent:fire(wide) end
+    end
+    inboundWide()
+    assert(f.receiver:GetAttribute("WideCalls") == 1 and #f.warnings == 2)
+    wide.f5000 = "wrong"
+    inboundWide()
+    assert(f.receiver:GetAttribute("WideCalls") == 1 and #f.warnings == 3)
+    assert(string.find(f.warnings[3], "value.f5000: expected number", 1, true))
+    count += 1
     rejects("only once", f.api.start)
     for _, scenario in { "protocol", "revision", "missing revision", "wrong revision class", "missing package", "wrong package class", "missing packages", "missing shared" } do
         f = setup(server)
         local expected
+        local missing
         if scenario == "protocol" then f.api._protocol = 0; expected = "CLI and package are incompatible"
         elseif scenario == "revision" then f.shared:FindFirstChild("Revision").Source = "return 'old'"; expected = "generated files disagree"
-        elseif scenario == "missing revision" then f.shared:FindFirstChild("Revision").Parent = nil; expected = "revision is missing"
-        elseif scenario == "wrong revision class" then f.shared:FindFirstChild("Revision").ClassName = "Folder"; expected = "revision is missing"
-        elseif scenario == "missing package" then f.package.Parent = nil; expected = "package is missing"
-        elseif scenario == "wrong package class" then f.package.ClassName = "Folder"; expected = "package is missing"
-        elseif scenario == "missing packages" then f.packages.Parent = nil; expected = "packages are missing"
-        else f.shared.Parent = nil; expected = "output is missing" end
-        rejects(expected, function() f.require(f.caller) end)
+        elseif scenario == "missing revision" then missing = f.shared:FindFirstChild("Revision")
+        elseif scenario == "wrong revision class" then f.shared:FindFirstChild("Revision").ClassName = "Folder"; expected = "revision must be a ModuleScript"
+        elseif scenario == "missing package" then missing = f.package
+        elseif scenario == "wrong package class" then f.package.ClassName = "Folder"; expected = "package must be a ModuleScript"
+        elseif scenario == "missing packages" then missing = f.packages
+        else missing = f.shared end
+        if missing then
+            local parent = missing.Parent
+            missing.Parent = nil
+            local loading = coroutine.create(function() return f.require(f.caller) end)
+            f.waiting(loading, parent, missing.Name)
+            missing.Parent = parent
+            assert(typeof(f.completed(loading).Tests.receive.fire) == "function")
+            count += 1
+        else
+            rejects(expected, function() f.require(f.caller) end)
+        end
     end
 end
 print(`Generated runtime: {count} checks passed`)

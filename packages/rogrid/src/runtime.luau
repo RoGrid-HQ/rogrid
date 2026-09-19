@@ -44,13 +44,13 @@ function Runtime.begin(destination: string, expected: string, ids: { string }): 
             remotes[id] = remote
         end
     else
-        local found = ReplicatedStorage:WaitForChild("RoGridEvents", 10)
-        assert(found and found:IsA("Folder"), "RoGrid server did not start within 10 seconds")
+        local found = ReplicatedStorage:WaitForChild("RoGridEvents")
+        assert(found:IsA("Folder"), "RoGridEvents must be a Folder")
         assert(found:GetAttribute("Revision") == expected, "RoGrid client/server generation differs; restart Play after running rogrid dev")
         folder = found
         for _, id in ids do
-            local remote = folder:WaitForChild(id, 10)
-            assert(remote and remote:IsA("RemoteEvent"), `RoGrid event {id} is missing`)
+            local remote = folder:WaitForChild(id)
+            assert(remote:IsA("RemoteEvent"), `RoGrid event {id} must be a RemoteEvent`)
             remotes[id] = remote
         end
     end
@@ -61,16 +61,12 @@ function Runtime.load(location: { string }, names: { string }): { [string]: Hand
     local current: Instance
     if location[1] == "PlayerScripts" then
         assert(RunService:IsClient(), "PlayerScripts event paths require a client")
-        local scripts = Players.LocalPlayer:WaitForChild("PlayerScripts", 10)
-        assert(scripts, "PlayerScripts is missing")
-        current = scripts
+        current = Players.LocalPlayer:WaitForChild("PlayerScripts")
     else
         current = game:GetService(location[1])
     end
     for index = 2, #location do
-        local child = current:WaitForChild(location[index], 10)
-        assert(child, `RoGrid receiver {table.concat(location, "/")} is missing; check the Rojo mapping and regenerate`)
-        current = child
+        current = current:WaitForChild(location[index])
     end
     local module = current
     local moduleName = table.concat(location, "/")
@@ -93,12 +89,10 @@ function Runtime.bind(id: string, handler: Handler, parameters: { validate.Param
     assert(side ~= nil and string.sub(id, 1, #side + 1) == side .. ".", "RoGrid receiver is on the wrong side")
     local remote = remotes[id]
     assert(remote, `RoGrid event {id} is missing`)
-    local lastWarning = -math.huge
     local function accepted(...: any): boolean
         local message = validate(parameters, ...)
         if message == nil then return true end
-        if RunService:IsStudio() and os.clock() - lastWarning >= 1 then
-            lastWarning = os.clock()
+        if RunService:IsStudio() then
             warn(`RoGrid dropped {id}: {message}`)
         end
         return false

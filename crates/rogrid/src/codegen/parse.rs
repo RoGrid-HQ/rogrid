@@ -8,6 +8,8 @@ use full_moon::ast::{
 };
 use full_moon::node::Node;
 
+use crate::config;
+
 use super::resolve::Resolver;
 use super::{Argument, Event, Module, Side};
 
@@ -29,7 +31,7 @@ pub fn module(
 pub(super) fn syntax(path: &Path, source: &str) -> Result<full_moon::ast::Ast> {
     let parsed = std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
+            .stack_size(config::PARSER_STACK_BYTES)
             .spawn_scoped(scope, || full_moon::parse(source))?
             .join()
             .map_err(|_| anyhow!("Luau parser panicked"))
@@ -136,7 +138,6 @@ fn declarations(
         let mut params = Vec::new();
         let mut param_names = BTreeSet::new();
         let mut annotations = body.type_specifiers();
-        let mut remaining = 4096;
         for (index, parameter) in body.parameters().iter().enumerate() {
             let Parameter::Name(token) = parameter else {
                 return Err(fail(
@@ -171,7 +172,7 @@ fn declarations(
                 continue;
             }
             let ty = resolver
-                .payload(path, annotation.type_info(), &mut remaining)
+                .payload(path, annotation.type_info())
                 .map_err(|error| fail(annotation, &format!("{error:#}")))?;
             params.push(Argument {
                 name: param_name,
@@ -183,9 +184,6 @@ fn declarations(
                 body,
                 "server handlers require a first parameter typed Player",
             ));
-        }
-        if params.len() > 16 {
-            return Err(fail(body, "events support at most 16 payload arguments"));
         }
         events.push(Event {
             name: event_name,
@@ -384,18 +382,32 @@ mod tests {
         let source = "return {e=RoGrid.event(function(player: Player) end)}";
         assert_eq!(parse(source, Side::Server).unwrap().events[0].args.len(), 0);
         assert_eq!(parse(source, Side::Client).unwrap().events[0].args.len(), 1);
-        for n in [16, 17] {
-            let args = (0..n)
-                .map(|i| format!(", p{i}: number"))
-                .collect::<String>();
-            assert_eq!(
-                parse(
-                    &format!("return {{e=RoGrid.event(function(player: Player{args}) end)}}"),
-                    Side::Server
-                )
-                .is_ok(),
-                n == 16
-            );
+    }
+
+    #[test]
+    fn event_arguments_above_the_former_cap_preserve_names_types_and_order() {
+        for side in [Side::Server, Side::Client] {
+            for n in [16, 17, 64] {
+                let args = (0..n)
+                    .map(|i| format!("p{i}: number"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sender = if side == Side::Server {
+                    "player: Player, "
+                } else {
+                    ""
+                };
+                let source = format!("return {{e=RoGrid.event(function({sender}{args}) end)}}");
+                let module = parse(&source, side).unwrap();
+                assert_eq!(module.events[0].args.len(), n);
+                for (i, arg) in module.events[0].args.iter().enumerate() {
+                    assert_eq!(arg.name, format!("p{i}"));
+                    assert_eq!(arg.ty, NetworkPayloadType::Leaf(Leaf::Number));
+                }
+                for (path, source) in emit::files(&[module], "test") {
+                    assert!(full_moon::parse(&source).is_ok(), "{path}: {source}");
+                }
+            }
         }
     }
 
@@ -483,15 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn expansion_is_bounded_by_depth_and_size() {
-        let deep = format!("{}number{}", "{".repeat(34), "}".repeat(34));
-        assert!(
-            payload(&deep, "")
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("32 levels")
-        );
+    fn large_alias_expansions_preserve_every_leaf() {
         let mut prelude = "type A0 = number\n".to_string();
         for i in 1..=13 {
             prelude.push_str(&format!(
@@ -500,7 +504,140 @@ mod tests {
                 i - 1
             ));
         }
-        assert!(format!("{:#}", payload("A13", &prelude).err().unwrap()).contains("4096 expanded"));
+        let module = payload("A13", &prelude).unwrap();
+        let ty = &module.events[0].args[0].ty;
+        assert_eq!(ty.to_string().matches("number").count(), 8192);
+        assert_eq!(ty.descriptor().matches("\"number\"").count(), 8192);
+        for (path, source) in emit::files(&[module], "test") {
+            syntax(Path::new(&path), &source).unwrap();
+        }
+    }
+
+    #[test]
+    fn large_records_and_combined_arguments_have_no_schema_budget() {
+        for (fields, arguments) in [(4095, 1), (4096, 1), (4097, 1), (2048, 2)] {
+            let fields_source = (0..fields)
+                .map(|i| format!("f{i}: number"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            for side in [Side::Server, Side::Client] {
+                let params = (0..arguments)
+                    .map(|i| format!("p{i}: Item"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sender = if side == Side::Server {
+                    "player: Player, "
+                } else {
+                    ""
+                };
+                let source = format!(
+                    "type Item = {{{fields_source}}}\nreturn {{send = RoGrid.event(function({sender}{params}) end)}}"
+                );
+                let module = parse(&source, side).unwrap();
+                assert_eq!(module.events[0].args.len(), arguments);
+                for arg in &module.events[0].args {
+                    let NetworkPayloadType::Record(record) = &arg.ty else {
+                        panic!("expected record")
+                    };
+                    assert_eq!(record.len(), fields);
+                    assert!(
+                        record
+                            .iter()
+                            .all(|field| field.ty == NetworkPayloadType::Leaf(Leaf::Number))
+                    );
+                }
+            }
+        }
+        let fields = (0..4097)
+            .map(|i| format!("f{i}: number, "))
+            .collect::<String>();
+        for (last, prelude, expected) in [
+            ("any", "", "unsupported payload type any"),
+            (
+                "Loop",
+                "type Loop = {next: Loop}\n",
+                "recursive payload alias Loop",
+            ),
+        ] {
+            let error = payload(&format!("{{{fields}last: {last}}}"), prelude)
+                .err()
+                .unwrap();
+            assert!(format!("{error:#}").contains(expected));
+        }
+    }
+
+    #[test]
+    fn deep_inline_types_generate_annotations_descriptors_and_reports() {
+        for depth in [33, 128] {
+            let ty = format!("{}number{}", "{ child: ".repeat(depth), " }".repeat(depth));
+            let module = payload(&ty, "").unwrap();
+            assert_eq!(module.events[0].args[0].ty.to_string(), ty);
+            assert_eq!(
+                module.events[0].args[0]
+                    .ty
+                    .descriptor()
+                    .matches("record =")
+                    .count(),
+                depth
+            );
+            let modules = [module];
+            assert!(
+                super::super::report::inventory(&modules)
+                    .values()
+                    .any(|signature| signature == &format!("value: {ty}"))
+            );
+            let generated = emit::files(&modules, "test");
+            assert!(generated["shared/Server.luau"].contains(&format!("value: {ty}")));
+            assert!(
+                generated["server/Start.luau"]
+                    .contains(&modules[0].events[0].args[0].ty.descriptor())
+            );
+            for (path, source) in generated {
+                syntax(Path::new(&path), &source).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn alias_chains_beyond_the_former_size_cap_resolve() {
+        let mut prelude = "type A0 = number\n".to_string();
+        for i in 1..=5000 {
+            prelude.push_str(&format!("type A{i} = A{}\n", i - 1));
+        }
+        for name in ["A4094", "A4095", "A5000"] {
+            let module = payload(name, &prelude).unwrap();
+            assert_eq!(module.events[0].args[0].ty.to_string(), "number");
+        }
+        let cyclic = prelude.replace("type A0 = number", "type A0 = A5000");
+        let error = payload("A5000", &cyclic).err().unwrap();
+        assert!(format!("{error:#}").contains("recursive payload alias A5000"));
+    }
+
+    #[test]
+    fn nested_aliases_keep_nil_checks_and_cycle_detection() {
+        let mut arrays = "type A0 = number\n".to_string();
+        let mut unions = "type A0 = nil\n".to_string();
+        for i in 1..=1000 {
+            arrays.push_str(&format!("type A{i} = {{A{}}}\n", i - 1));
+            unions.push_str(&format!("type A{i} = A{} | number\n", i - 1));
+        }
+        let module = payload("A1000", &arrays).unwrap();
+        let ty = &module.events[0].args[0].ty;
+        assert_eq!(ty.to_string().matches('{').count(), 1000);
+        assert_eq!(ty.descriptor().matches("array =").count(), 1000);
+        assert!(!ty.accepts_nil());
+        assert!(
+            payload("{A1000}", &unions)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("array elements cannot be optional")
+        );
+        let cyclic = arrays.replace("type A0 = number", "type A0 = A1000");
+        assert!(
+            format!("{:#}", payload("A1000", &cyclic).err().unwrap())
+                .contains("recursive payload alias")
+        );
     }
 
     #[test]
@@ -515,7 +652,20 @@ mod tests {
             files["shared/Server.luau"]
                 .contains("value: ({ flags: { boolean }, id: string, kind: ('a' | 'b') })?")
         );
-        assert!(files["server/Start.luau"].contains(r#"{ name = "value", shape = { optional = { record = { ["flags"] = { array = "boolean" }, ["id"] = "string", ["kind"] = { union = ({ { literal = 'a' }, { literal = 'b' } } :: { any }) } } } } },"#));
+        assert!(files["server/Start.luau"].contains(
+            r#"{ name = "value", shape = (function(): any
+local shapes: {any} = {}
+shapes[1] = { literal = 'b' }
+shapes[2] = { literal = 'a' }
+shapes[3] = "boolean"
+shapes[4] = { union = ({ shapes[2], shapes[1] } :: { any }) }
+shapes[5] = "string"
+shapes[6] = { array = shapes[3] }
+shapes[7] = { record = { ["flags"] = shapes[6], ["id"] = shapes[5], ["kind"] = shapes[4] } }
+shapes[8] = { optional = shapes[7] }
+return shapes[8]
+end)() },"#
+        ));
         assert!(!files["server/Start.luau"].contains("function(..."));
         assert!(files["server/Start.luau"].contains("_protocol == 3"));
     }
@@ -540,6 +690,16 @@ mod tests {
             "{[string]: {id: string, value: number?}}",
             "{['hello-world']: string}",
         ]);
+        let deep = format!("{}number{}", "{ child: ".repeat(128), " }".repeat(128));
+        types.push(&deep);
+        let wide = format!(
+            "{{ {} }}",
+            (1..=5000)
+                .map(|i| format!("f{i}: number"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        types.push(&wide);
         let mut descriptors = Vec::new();
         let mut callers = Vec::new();
         for (i, source) in types.iter().enumerate() {

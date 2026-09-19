@@ -59,6 +59,10 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: GitHub release workflow tests
+        if: runner.os == 'Linux'
+        run: bash .github/tests/release.sh
+
       - name: Release metadata
         run: cargo xtask release check
 

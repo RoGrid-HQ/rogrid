@@ -1,5 +1,6 @@
 //! Network payload types only. Other framework features are not restricted by this model.
-use std::fmt;
+use std::collections::HashMap;
+use std::fmt::{self, Write};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NetworkPayloadType {
@@ -89,82 +90,235 @@ impl NetworkPayloadType {
     }
 
     pub fn accepts_nil(&self) -> bool {
-        match self {
-            Self::Nil | Self::Optional(_) => true,
-            Self::Union(types) => types.iter().any(Self::accepts_nil),
-            _ => false,
+        let mut pending = vec![self];
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Self::Nil | Self::Optional(_) => return true,
+                Self::Union(types) => pending.extend(types),
+                _ => {}
+            }
         }
+        false
     }
 
     pub fn descriptor(&self) -> String {
-        match self {
-            Self::Leaf(leaf) => quote(leaf.name()),
-            Self::Instance(name) => format!("{{ instance = {} }}", quote(name)),
-            Self::Enum(name) => format!("{{ enum = {} }}", quote(name)),
-            Self::StringLiteral(value) => format!("{{ literal = {value} }}"),
-            Self::BooleanLiteral(value) => format!("{{ literal = {value} }}"),
-            Self::Nil => quote("nil"),
-            Self::Optional(inner) => format!("{{ optional = {} }}", inner.descriptor()),
-            Self::Array(inner) => format!("{{ array = {} }}", inner.descriptor()),
-            Self::Dictionary(inner) => format!("{{ dictionary = {} }}", inner.descriptor()),
-            Self::Record(fields) => format!(
-                "{{ record = {{ {} }} }}",
-                fields
-                    .iter()
-                    .map(|field| format!("[{}] = {}", quote(&field.name), field.ty.descriptor()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            // Luau otherwise infers the first branch's exact table shape for the
-            // entire descriptor list. This annotation is internal, not a caller type.
-            Self::Union(types) => format!(
-                "{{ union = ({{ {} }} :: {{ any }}) }}",
-                types
-                    .iter()
-                    .map(Self::descriptor)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+        let mut nodes = vec![self];
+        let mut next = 0;
+        while next < nodes.len() {
+            match nodes[next] {
+                Self::Optional(inner) | Self::Array(inner) | Self::Dictionary(inner) => {
+                    nodes.push(inner)
+                }
+                Self::Record(fields) => nodes.extend(fields.iter().map(|field| &field.ty)),
+                Self::Union(types) => nodes.extend(types),
+                _ => {}
+            }
+            next += 1;
         }
+        let mut result = String::new();
+        let mut references = HashMap::new();
+        if nodes.len() == 1 {
+            self.render(&mut result, true, &references).unwrap();
+            return result;
+        }
+        // Build one layer per statement to avoid Luau's register limit on deeply
+        // nested table literals. The temporary list is discarded after startup.
+        result.push_str("(function(): any\nlocal shapes: {any} = {}\n");
+        let count = nodes.len();
+        for (index, ty) in nodes.into_iter().rev().enumerate() {
+            let id = index + 1;
+            write!(result, "shapes[{id}] = ").unwrap();
+            ty.render(&mut result, true, &references).unwrap();
+            result.push('\n');
+            // Addresses identify borrowed nodes only; no raw pointer is dereferenced.
+            references.insert(ty as *const Self, id);
+        }
+        write!(result, "return shapes[{count}]\nend)()").unwrap();
+        result
+    }
+
+    // Both public annotations and runtime descriptors walk the same type tree
+    // with a work list; neither adds a Rust call for each nesting level.
+    fn render(
+        &self,
+        out: &mut impl fmt::Write,
+        descriptor: bool,
+        references: &HashMap<*const Self, usize>,
+    ) -> fmt::Result {
+        enum Part<'a> {
+            Type(&'a NetworkPayloadType),
+            Field(&'a Field),
+            Text(&'static str),
+        }
+        let mut pending = vec![Part::Type(self)];
+        while let Some(part) = pending.pop() {
+            match part {
+                Part::Text(text) => out.write_str(text)?,
+                Part::Field(field) => {
+                    if descriptor {
+                        write!(out, "[{}] = ", quote(&field.name))?;
+                    } else if super::identifier(&field.name) {
+                        write!(out, "{}: ", field.name)?;
+                    } else {
+                        write!(out, "[{}]: ", quote(&field.name))?;
+                    }
+                }
+                Part::Type(ty) => {
+                    if let Some(id) = references.get(&(ty as *const Self)) {
+                        write!(out, "shapes[{id}]")?;
+                        continue;
+                    }
+                    match ty {
+                        Self::Leaf(leaf) => out.write_str(&if descriptor {
+                            quote(leaf.name())
+                        } else {
+                            leaf.name().to_string()
+                        })?,
+                        Self::Instance(name) => {
+                            if descriptor {
+                                write!(out, "{{ instance = {} }}", quote(name))?;
+                            } else {
+                                out.write_str(name)?;
+                            }
+                        }
+                        Self::Enum(name) => {
+                            if descriptor {
+                                write!(out, "{{ enum = {} }}", quote(name))?;
+                            } else {
+                                write!(out, "Enum.{name}")?;
+                            }
+                        }
+                        Self::StringLiteral(value) => {
+                            if descriptor {
+                                write!(out, "{{ literal = {value} }}")?;
+                            } else {
+                                out.write_str(value)?;
+                            }
+                        }
+                        Self::BooleanLiteral(value) => {
+                            if descriptor {
+                                write!(out, "{{ literal = {value} }}")?;
+                            } else {
+                                write!(out, "{value}")?;
+                            }
+                        }
+                        Self::Nil => out.write_str(if descriptor { "\"nil\"" } else { "nil" })?,
+                        Self::Optional(inner) | Self::Array(inner) | Self::Dictionary(inner) => {
+                            let (open, close) = match (ty, descriptor) {
+                                (Self::Optional(_), true) => ("{ optional = ", " }"),
+                                (Self::Array(_), true) => ("{ array = ", " }"),
+                                (Self::Dictionary(_), true) => ("{ dictionary = ", " }"),
+                                (Self::Optional(_), false) => ("(", ")?"),
+                                (Self::Array(_), false) => ("{ ", " }"),
+                                _ => ("{ [string]: ", " }"),
+                            };
+                            out.write_str(open)?;
+                            pending.push(Part::Text(close));
+                            pending.push(Part::Type(inner));
+                        }
+                        Self::Record(fields) => {
+                            out.write_str(if descriptor { "{ record = { " } else { "{ " })?;
+                            pending.push(Part::Text(if descriptor { " } }" } else { " }" }));
+                            for (index, field) in fields.iter().enumerate().rev() {
+                                pending.push(Part::Type(&field.ty));
+                                pending.push(Part::Field(field));
+                                if index > 0 {
+                                    pending.push(Part::Text(", "));
+                                }
+                            }
+                        }
+                        Self::Union(types) => {
+                            // The cast keeps Luau from inferring the first branch's exact shape.
+                            out.write_str(if descriptor { "{ union = ({ " } else { "(" })?;
+                            pending.push(Part::Text(if descriptor {
+                                " } :: { any }) }"
+                            } else {
+                                ")"
+                            }));
+                            for (index, ty) in types.iter().enumerate().rev() {
+                                pending.push(Part::Type(ty));
+                                if index > 0 {
+                                    pending.push(Part::Text(if descriptor { ", " } else { " | " }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
 impl fmt::Display for NetworkPayloadType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Leaf(leaf) => f.write_str(leaf.name()),
-            Self::Instance(name) => f.write_str(name),
-            Self::Enum(name) => write!(f, "Enum.{name}"),
-            Self::StringLiteral(value) => f.write_str(value),
-            Self::BooleanLiteral(value) => write!(f, "{value}"),
-            Self::Nil => f.write_str("nil"),
-            Self::Optional(inner) => write!(f, "({inner})?"),
-            Self::Array(inner) => write!(f, "{{ {inner} }}"),
-            Self::Dictionary(inner) => write!(f, "{{ [string]: {inner} }}"),
-            Self::Record(fields) => {
-                f.write_str("{ ")?;
-                for (index, field) in fields.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(", ")?;
-                    }
-                    if super::identifier(&field.name) {
-                        write!(f, "{}: {}", field.name, field.ty)?;
-                    } else {
-                        write!(f, "[{}]: {}", quote(&field.name), field.ty)?;
-                    }
+        self.render(f, false, &HashMap::new())
+    }
+}
+
+// Free deep type trees iteratively as well, including partially resolved types
+// on an error path. Otherwise dropping Box/Vec children reintroduces recursion.
+impl Drop for NetworkPayloadType {
+    fn drop(&mut self) {
+        fn children(ty: &mut NetworkPayloadType, pending: &mut Vec<NetworkPayloadType>) {
+            match ty {
+                NetworkPayloadType::Optional(inner)
+                | NetworkPayloadType::Array(inner)
+                | NetworkPayloadType::Dictionary(inner) => {
+                    pending.push(std::mem::replace(inner.as_mut(), NetworkPayloadType::Nil));
                 }
-                f.write_str(" }")
-            }
-            Self::Union(types) => {
-                f.write_str("(")?;
-                for (index, ty) in types.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(" | ")?;
-                    }
-                    write!(f, "{ty}")?;
+                NetworkPayloadType::Record(fields) => {
+                    pending.extend(std::mem::take(fields).into_iter().map(|field| field.ty));
                 }
-                f.write_str(")")
+                NetworkPayloadType::Union(types) => pending.append(types),
+                _ => {}
             }
         }
+        let mut pending = Vec::new();
+        children(self, &mut pending);
+        while let Some(mut ty) = pending.pop() {
+            children(&mut ty, &mut pending);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deep_type_rendering_nil_checks_and_drop_use_a_work_list() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ty = NetworkPayloadType::Nil;
+                for _ in 0..10_000 {
+                    ty =
+                        NetworkPayloadType::Union(vec![NetworkPayloadType::Leaf(Leaf::Number), ty]);
+                }
+                assert!(ty.accepts_nil());
+                assert_eq!(ty.to_string().matches("number").count(), 10_000);
+                assert_eq!(ty.descriptor().matches("union =").count(), 10_000);
+                drop(ty);
+                let mut ty = NetworkPayloadType::Leaf(Leaf::String);
+                for i in 0..10_000 {
+                    ty = match i % 4 {
+                        0 => NetworkPayloadType::Array(Box::new(ty)),
+                        1 => NetworkPayloadType::Dictionary(Box::new(ty)),
+                        2 => NetworkPayloadType::Optional(Box::new(ty)),
+                        _ => NetworkPayloadType::Record(vec![Field {
+                            name: "child".into(),
+                            ty,
+                        }]),
+                    };
+                }
+                assert!(!ty.accepts_nil());
+                assert!(ty.to_string().contains("string"));
+                assert!(ty.descriptor().contains("\"string\""));
+                drop(ty);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

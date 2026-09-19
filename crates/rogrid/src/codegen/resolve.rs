@@ -1,16 +1,17 @@
 //! Resolve static Luau payload types without running game code.
 use super::sourcemap::Node;
 use super::types::{Field, Leaf, NetworkPayloadType as Type, is_class, is_enum};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use full_moon::ast::luau::{IndexedTypeInfo, TypeDeclaration, TypeFieldKey, TypeInfo};
 use full_moon::ast::{Ast, Call, Expression, FunctionArgs, Index, Prefix, Stmt, Suffix, Var};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 #[derive(Default)]
 struct Declarations {
-    aliases: BTreeMap<String, (TypeDeclaration, bool)>,
+    aliases: BTreeMap<String, (Rc<TypeDeclaration>, bool)>,
     locals: BTreeMap<String, Expression>,
     bound: BTreeSet<String>,
 }
@@ -19,7 +20,6 @@ pub struct Resolver<'a> {
     root: &'a Path,
     map: &'a Node,
     modules: BTreeMap<PathBuf, Declarations>,
-    active: BTreeSet<(PathBuf, String)>,
     pub dependencies: BTreeMap<PathBuf, String>,
 }
 
@@ -29,7 +29,6 @@ impl<'a> Resolver<'a> {
             root,
             map,
             modules: BTreeMap::new(),
-            active: BTreeSet::new(),
             dependencies: BTreeMap::new(),
         }
     }
@@ -74,7 +73,7 @@ impl<'a> Resolver<'a> {
                 }
                 if module
                     .aliases
-                    .insert(name.clone(), (alias.clone(), exported))
+                    .insert(name.clone(), (Rc::new(alias.clone()), exported))
                     .is_some()
                 {
                     bail!("{}: duplicate type alias {name}", path.display());
@@ -88,136 +87,284 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    pub fn payload(&mut self, path: &Path, ty: &TypeInfo, remaining: &mut usize) -> Result<Type> {
-        self.resolve(path, ty, 0, remaining)
-    }
-
-    fn resolve(
+    // Load reachable imports before borrowing their syntax nodes for resolution.
+    fn prepare(
         &mut self,
         path: &Path,
         ty: &TypeInfo,
-        depth: usize,
-        remaining: &mut usize,
-    ) -> Result<Type> {
-        if depth > 32 {
-            bail!("payload types exceed 32 levels of nesting/alias expansion");
+    ) -> Result<BTreeMap<(PathBuf, String), PathBuf>> {
+        let mut imports = BTreeMap::new();
+        let mut aliases = Vec::new();
+        self.scan_imports(path, ty, &mut imports, &mut aliases)?;
+        let mut visited = BTreeSet::new();
+        while let Some((path, name, exported)) = aliases.pop() {
+            let Some((alias, public)) = self.modules[&path].aliases.get(&name).cloned() else {
+                continue; // Resolution reports unknown aliases with their context.
+            };
+            if alias.generics().is_none()
+                && (!exported || public)
+                && visited.insert((path.clone(), name.clone()))
+            {
+                self.scan_imports(&path, alias.type_definition(), &mut imports, &mut aliases)
+                    .with_context(|| format!("in alias {name} ({})", path.display()))?;
+            }
         }
-        if *remaining == 0 {
-            bail!("payload schema exceeds 4096 expanded nodes per event");
-        }
-        *remaining -= 1;
-        Ok(match ty {
-            TypeInfo::Basic(token) => {
-                let name = token.token().to_string();
-                if name == "nil" {
-                    Type::Nil
-                } else if let Some(leaf) = Leaf::parse(&name) {
-                    Type::Leaf(leaf)
-                } else if is_class(&name) {
-                    Type::Instance(name)
-                } else {
-                    return self.alias(path, &name, false, depth + 1, remaining);
-                }
-            }
-            // Preserve Luau's literal token, including arbitrary byte escapes.
-            TypeInfo::String(token) => Type::StringLiteral(token.token().to_string()),
-            TypeInfo::Boolean(token) => Type::BooleanLiteral(token.token().to_string() == "true"),
-            TypeInfo::Optional { base, .. } => {
-                self.resolve(path, base, depth + 1, remaining)?.optional()
-            }
-            TypeInfo::Array {
-                type_info, access, ..
-            } => {
-                if access.is_some() {
-                    bail!("read/write modifiers are not supported in payload types");
-                }
-                Self::array(self.resolve(path, type_info, depth + 1, remaining)?)?
-            }
-            TypeInfo::Table { fields, .. } => {
-                let mut names = BTreeSet::new();
-                let mut record = Vec::new();
-                let mut indexed = None;
-                for field in fields.iter() {
-                    if field.access().is_some() {
-                        bail!("read/write modifiers are not supported in payload types");
+        Ok(imports)
+    }
+
+    fn scan_imports(
+        &mut self,
+        path: &Path,
+        ty: &TypeInfo,
+        imports: &mut BTreeMap<(PathBuf, String), PathBuf>,
+        aliases: &mut Vec<(PathBuf, String, bool)>,
+    ) -> Result<()> {
+        let mut pending = vec![ty];
+        while let Some(ty) = pending.pop() {
+            match ty {
+                TypeInfo::Basic(token) => {
+                    let name = token.token().to_string();
+                    if name != "nil" && Leaf::parse(&name).is_none() && !is_class(&name) {
+                        aliases.push((path.to_path_buf(), name, false));
                     }
-                    let value = self.resolve(path, field.value(), depth + 1, remaining)?;
-                    let name = match field.key() {
-                        TypeFieldKey::Name(name) => name.token().to_string(),
-                        TypeFieldKey::IndexSignature { inner, .. } => {
-                            match self.resolve(path, inner, depth + 1, remaining)? {
-                                Type::StringLiteral(name) => literal_name(&name)?,
-                                Type::Leaf(key @ (Leaf::String | Leaf::Number)) => {
-                                    if fields.len() != 1 {
-                                        bail!(
-                                            "use a record or a dictionary/array, not mixed table fields and indexers"
-                                        );
-                                    }
-                                    indexed = Some(if key == Leaf::String {
-                                        Type::Dictionary(Box::new(value))
-                                    } else {
-                                        Self::array(value)?
-                                    });
-                                    continue;
-                                }
-                                _ => bail!(
-                                    "table indexers must be string or number; Instance keys cannot cross remotes faithfully"
-                                ),
+                }
+                TypeInfo::Module {
+                    module, type_info, ..
+                } => {
+                    let IndexedTypeInfo::Basic(name) = &**type_info else {
+                        continue;
+                    };
+                    let module = module.token().to_string();
+                    if module != "Enum" {
+                        let key = (path.to_path_buf(), module.clone());
+                        if !imports.contains_key(&key) {
+                            imports.insert(key.clone(), self.import(path, &module)?);
+                        }
+                        aliases.push((imports[&key].clone(), name.token().to_string(), true));
+                    }
+                }
+                TypeInfo::Optional { base, .. } => pending.push(base),
+                TypeInfo::Array { type_info, .. } => pending.push(type_info),
+                TypeInfo::Table { fields, .. } => {
+                    for field in fields.iter().collect::<Vec<_>>().into_iter().rev() {
+                        if let TypeFieldKey::IndexSignature { inner, .. } = field.key() {
+                            pending.push(inner);
+                        }
+                        pending.push(field.value());
+                    }
+                }
+                TypeInfo::Union(union) => {
+                    pending.extend(union.types().iter().collect::<Vec<_>>().into_iter().rev())
+                }
+                TypeInfo::Tuple { types, .. } if types.len() == 1 => pending.extend(types.iter()),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    pub fn payload(&mut self, path: &Path, ty: &TypeInfo) -> Result<Type> {
+        let imports = self.prepare(path, ty)?;
+        enum Work<'a> {
+            Visit(&'a Path, &'a TypeInfo),
+            Alias(&'a Path, String, bool),
+            LeaveAlias,
+            Optional,
+            Array,
+            Table(Vec<&'a full_moon::ast::luau::TypeField>, usize),
+            Union(usize),
+        }
+        let mut pending = vec![Work::Visit(path, ty)];
+        let mut values = Vec::new();
+        let mut active = BTreeSet::new();
+        let mut context = Vec::new();
+        let result = (|| {
+            while let Some(work) = pending.pop() {
+                match work {
+                    Work::Visit(path, ty) => match ty {
+                        TypeInfo::Basic(token) => {
+                            let name = token.token().to_string();
+                            if name == "nil" {
+                                values.push(Type::Nil);
+                            } else if let Some(leaf) = Leaf::parse(&name) {
+                                values.push(Type::Leaf(leaf));
+                            } else if is_class(&name) {
+                                values.push(Type::Instance(name));
+                            } else {
+                                pending.push(Work::Alias(path, name, false));
                             }
                         }
-                        _ => bail!(
-                            "table keys must be named fields, string literals, or a string/number indexer"
+                        TypeInfo::String(token) => {
+                            values.push(Type::StringLiteral(token.token().to_string()))
+                        }
+                        TypeInfo::Boolean(token) => {
+                            values.push(Type::BooleanLiteral(token.token().to_string() == "true"))
+                        }
+                        TypeInfo::Optional { base, .. } => {
+                            pending.push(Work::Optional);
+                            pending.push(Work::Visit(path, base));
+                        }
+                        TypeInfo::Array {
+                            type_info, access, ..
+                        } => {
+                            if access.is_some() {
+                                bail!("read/write modifiers are not supported in payload types");
+                            }
+                            pending.push(Work::Array);
+                            pending.push(Work::Visit(path, type_info));
+                        }
+                        TypeInfo::Table { fields, .. } => {
+                            pending.push(Work::Table(fields.iter().collect(), values.len()));
+                            for field in fields.iter().collect::<Vec<_>>().into_iter().rev() {
+                                if field.access().is_some() {
+                                    bail!(
+                                        "read/write modifiers are not supported in payload types"
+                                    );
+                                }
+                                if let TypeFieldKey::IndexSignature { inner, .. } = field.key() {
+                                    pending.push(Work::Visit(path, inner));
+                                }
+                                pending.push(Work::Visit(path, field.value()));
+                            }
+                        }
+                        TypeInfo::Union(union) => {
+                            pending.push(Work::Union(values.len()));
+                            pending.extend(
+                                union
+                                    .types()
+                                    .iter()
+                                    .collect::<Vec<_>>()
+                                    .into_iter()
+                                    .rev()
+                                    .map(|ty| Work::Visit(path, ty)),
+                            );
+                        }
+                        TypeInfo::Tuple { types, .. } if types.len() == 1 => {
+                            pending.push(Work::Visit(path, types.iter().next().unwrap()));
+                        }
+                        TypeInfo::Module {
+                            module, type_info, ..
+                        } => {
+                            let IndexedTypeInfo::Basic(name) = &**type_info else {
+                                bail!("generic payload aliases are not supported");
+                            };
+                            let name = name.token().to_string();
+                            let module = module.token().to_string();
+                            if module == "Enum" {
+                                if !is_enum(&name) {
+                                    bail!("unknown Roblox enum Enum.{name}");
+                                }
+                                values.push(Type::Enum(name));
+                            } else {
+                                let imported = &imports[&(path.to_path_buf(), module)];
+                                pending.push(Work::Alias(imported, name, true));
+                            }
+                        }
+                        TypeInfo::Generic { .. } | TypeInfo::GenericPack { .. } => {
+                            bail!("generic payload aliases are not supported")
+                        }
+                        TypeInfo::Intersection(_) => bail!(
+                            "intersection payload types are not supported; declare one record or a union"
                         ),
-                    };
-                    if !names.insert(name.clone()) {
-                        bail!("duplicate record field {name}");
+                        TypeInfo::Typeof { .. } => bail!(
+                            "computed payload types (typeof) are not supported; write an explicit type"
+                        ),
+                        TypeInfo::Callback { .. } => {
+                            bail!("functions cannot be sent through Roblox remotes")
+                        }
+                        _ => bail!(
+                            "unsupported payload type; use explicit values, records, arrays, dictionaries, or unions"
+                        ),
+                    },
+                    Work::Alias(path, name, exported) => {
+                        let (alias, public) = self.modules.get(path).and_then(|m| m.aliases.get(&name))
+                            .with_context(|| format!("unsupported payload type {name}; use a supported built-in or explicit type alias"))?;
+                        if exported && !public {
+                            bail!("{}: type {name} must be exported", path.display());
+                        }
+                        if alias.generics().is_some() {
+                            bail!("generic payload aliases are not supported: {name}");
+                        }
+                        let key = (path.to_path_buf(), name.clone());
+                        if !active.insert(key.clone()) {
+                            bail!("recursive payload alias {name} in {}", path.display());
+                        }
+                        context.push(key);
+                        pending.push(Work::LeaveAlias);
+                        pending.push(Work::Visit(path, alias.type_definition()));
                     }
-                    record.push(Field { name, ty: value });
-                }
-                record.sort_by(|a, b| a.name.cmp(&b.name));
-                indexed.unwrap_or(Type::Record(record))
-            }
-            TypeInfo::Union(union) => Type::Union(
-                union
-                    .types()
-                    .iter()
-                    .map(|ty| self.resolve(path, ty, depth + 1, remaining))
-                    .collect::<Result<_>>()?,
-            ),
-            TypeInfo::Tuple { types, .. } if types.len() == 1 => {
-                self.resolve(path, types.iter().next().unwrap(), depth + 1, remaining)?
-            }
-            TypeInfo::Module {
-                module, type_info, ..
-            } => {
-                let IndexedTypeInfo::Basic(name) = &**type_info else {
-                    bail!("generic payload aliases are not supported");
-                };
-                let name = name.token().to_string();
-                let module = module.token().to_string();
-                if module == "Enum" {
-                    if !is_enum(&name) {
-                        bail!("unknown Roblox enum Enum.{name}");
+                    Work::LeaveAlias => {
+                        active.remove(&context.pop().unwrap());
                     }
-                    Type::Enum(name)
-                } else {
-                    let imported = self.import(path, &module)?;
-                    self.alias(&imported, &name, true, depth + 1, remaining)?
+                    Work::Optional => {
+                        let value = values.pop().unwrap();
+                        values.push(value.optional());
+                    }
+                    Work::Array => {
+                        let value = values.pop().unwrap();
+                        values.push(Self::array(value)?);
+                    }
+                    Work::Union(start) => {
+                        let branches = values.split_off(start);
+                        values.push(Type::Union(branches));
+                    }
+                    Work::Table(fields, start) => {
+                        let mut resolved = values.split_off(start).into_iter();
+                        let mut names = BTreeSet::new();
+                        let mut record = Vec::new();
+                        let mut indexed = None;
+                        for field in &fields {
+                            let value = resolved.next().unwrap();
+                            let name = match field.key() {
+                                TypeFieldKey::Name(name) => name.token().to_string(),
+                                TypeFieldKey::IndexSignature { .. } => {
+                                    match &resolved.next().unwrap() {
+                                        Type::StringLiteral(name) => literal_name(name)?,
+                                        Type::Leaf(key @ (Leaf::String | Leaf::Number)) => {
+                                            if fields.len() != 1 {
+                                                bail!(
+                                                    "use a record or a dictionary/array, not mixed table fields and indexers"
+                                                );
+                                            }
+                                            indexed = Some(if *key == Leaf::String {
+                                                Type::Dictionary(Box::new(value))
+                                            } else {
+                                                Self::array(value)?
+                                            });
+                                            continue;
+                                        }
+                                        _ => bail!(
+                                            "table indexers must be string or number; Instance keys cannot cross remotes faithfully"
+                                        ),
+                                    }
+                                }
+                                _ => bail!(
+                                    "table keys must be named fields, string literals, or a string/number indexer"
+                                ),
+                            };
+                            if !names.insert(name.clone()) {
+                                bail!("duplicate record field {name}");
+                            }
+                            record.push(Field { name, ty: value });
+                        }
+                        record.sort_by(|a, b| a.name.cmp(&b.name));
+                        values.push(indexed.unwrap_or(Type::Record(record)));
+                    }
                 }
             }
-            TypeInfo::Generic { .. } | TypeInfo::GenericPack { .. } => {
-                bail!("generic payload aliases are not supported")
+            Ok(values.pop().unwrap())
+        })();
+        result.map_err(|error: anyhow::Error| {
+            // Keep alias context as text; thousands of nested error objects
+            // would recurse again when the error is dropped.
+            if context.is_empty() {
+                return error;
             }
-            TypeInfo::Intersection(_) => {
-                bail!("intersection payload types are not supported; declare one record or a union")
-            }
-            TypeInfo::Typeof { .. } => {
-                bail!("computed payload types (typeof) are not supported; write an explicit type")
-            }
-            TypeInfo::Callback { .. } => bail!("functions cannot be sent through Roblox remotes"),
-            _ => bail!(
-                "unsupported payload type; use explicit values, records, arrays, dictionaries, or unions"
-            ),
+            let context = context
+                .iter()
+                .map(|(path, name)| format!("in alias {name} ({}): ", path.display()))
+                .collect::<String>();
+            anyhow!("{context}{error:#}")
         })
     }
 
@@ -226,33 +373,6 @@ impl<'a> Resolver<'a> {
             bail!("array elements cannot be optional; use {{T}}? for an optional array");
         }
         Ok(Type::Array(Box::new(value)))
-    }
-
-    fn alias(
-        &mut self,
-        path: &Path,
-        name: &str,
-        exported: bool,
-        depth: usize,
-        remaining: &mut usize,
-    ) -> Result<Type> {
-        let (alias, public) = self.modules.get(path).and_then(|m| m.aliases.get(name)).cloned()
-            .with_context(|| format!("unsupported payload type {name}; use a supported built-in or explicit type alias"))?;
-        if exported && !public {
-            bail!("{}: type {name} must be exported", path.display());
-        }
-        if alias.generics().is_some() {
-            bail!("generic payload aliases are not supported: {name}");
-        }
-        let key = (path.to_path_buf(), name.to_string());
-        if !self.active.insert(key.clone()) {
-            bail!("recursive payload alias {name} in {}", path.display());
-        }
-        let result = self
-            .resolve(path, alias.type_definition(), depth, remaining)
-            .with_context(|| format!("in alias {name} ({})", path.display()));
-        self.active.remove(&key);
-        result
     }
 
     fn import(&mut self, path: &Path, name: &str) -> Result<PathBuf> {
@@ -304,7 +424,7 @@ impl<'a> Resolver<'a> {
                 self.map.module_at(self.root, &location)?
             }
             expr => {
-                let location = self.instance_path(path, expr, &mut BTreeSet::new(), 0)?;
+                let location = self.instance_path(path, expr)?;
                 self.map.module_at(self.root, &location)?
             }
         };
@@ -330,49 +450,48 @@ impl<'a> Resolver<'a> {
         Ok(target)
     }
 
-    fn instance_path(
-        &self,
-        path: &Path,
-        expr: &Expression,
-        active: &mut BTreeSet<String>,
-        depth: usize,
-    ) -> Result<Vec<String>> {
-        if depth > 32 {
-            bail!("static require path is too deeply nested");
-        }
-        let (prefix, suffixes): (Prefix, Vec<&Suffix>) = match expr {
-            Expression::Var(Var::Name(name)) => (Prefix::Name(name.clone()), vec![]),
-            Expression::Var(Var::Expression(var)) => {
-                (var.prefix().clone(), var.suffixes().collect())
-            }
-            Expression::FunctionCall(call) => (call.prefix().clone(), call.suffixes().collect()),
-            _ => bail!("require path must use game, script, or a static local path"),
-        };
-        let Prefix::Name(name) = prefix else {
-            bail!("computed require paths are not supported");
-        };
-        let name = name.token().to_string();
-        if matches!(name.as_str(), "game" | "script") && self.modules[path].bound.contains(&name) {
-            bail!("static type imports cannot shadow {name}");
-        }
-        let mut location = match name.as_str() {
-            "game" => vec![],
-            "script" => self.map.source_location(self.root, path)?,
-            _ => {
-                if !active.insert(name.clone()) {
-                    bail!("cyclic local in require path: {name}");
+    fn instance_path(&self, path: &Path, expr: &Expression) -> Result<Vec<String>> {
+        let mut current = expr;
+        let mut seen = BTreeSet::new();
+        let mut suffixes = Vec::new();
+        let mut location = loop {
+            let (prefix, parts): (Prefix, Vec<&Suffix>) = match current {
+                Expression::Var(Var::Name(name)) => (Prefix::Name(name.clone()), vec![]),
+                Expression::Var(Var::Expression(var)) => {
+                    (var.prefix().clone(), var.suffixes().collect())
                 }
-                let value = self
-                    .modules
-                    .get(path)
-                    .and_then(|m| m.locals.get(&name))
-                    .context("require path uses a non-static local")?;
-                let result = self.instance_path(path, value, active, depth + 1)?;
-                active.remove(&name);
-                result
+                Expression::FunctionCall(call) => {
+                    (call.prefix().clone(), call.suffixes().collect())
+                }
+                _ => bail!("require path must use game, script, or a static local path"),
+            };
+            let Prefix::Name(name) = prefix else {
+                bail!("computed require paths are not supported");
+            };
+            let name = name.token().to_string();
+            if matches!(name.as_str(), "game" | "script")
+                && self.modules[path].bound.contains(&name)
+            {
+                bail!("static type imports cannot shadow {name}");
+            }
+            // Follow locals to the root, then apply their path operations outward.
+            suffixes.extend(parts.into_iter().rev());
+            match name.as_str() {
+                "game" => break vec![],
+                "script" => break self.map.source_location(self.root, path)?,
+                _ => {
+                    if !seen.insert(name.clone()) {
+                        bail!("cyclic local in require path: {name}");
+                    }
+                    current = self
+                        .modules
+                        .get(path)
+                        .and_then(|m| m.locals.get(&name))
+                        .context("require path uses a non-static local")?;
+                }
             }
         };
-        for suffix in suffixes {
+        for suffix in suffixes.into_iter().rev() {
             match suffix {
                 Suffix::Index(Index::Dot { name, .. }) => {
                     let name = name.token().to_string();
@@ -510,7 +629,8 @@ mod tests {
         let ast = super::super::parse::syntax(&main, source)?;
         let mut resolver = Resolver::new(root, &map);
         resolver.add(&main, &ast)?;
-        let result = resolver.alias(&main, "Payload", false, 0, &mut 4096)?;
+        let alias = resolver.modules[&main].aliases["Payload"].0.clone();
+        let result = resolver.payload(&main, alias.type_definition())?;
         Ok((result, resolver.dependencies.len()))
     }
 
@@ -536,6 +656,79 @@ mod tests {
         }
     }
 
+    fn local_path_chain(root: &str, last: usize) -> String {
+        let mut source = format!("local p0 = {root}\n");
+        for i in 1..=last {
+            source.push_str(&format!("local p{i} = p{}\n", i - 1));
+        }
+        source
+    }
+
+    #[test]
+    fn long_local_require_paths_resolve_and_can_be_reused() {
+        for root in ["game:GetService('ReplicatedStorage')", "script.Parent"] {
+            for last in [31, 32, 33, 128] {
+                let mut source = local_path_chain(root, last);
+                source.push_str(&format!(
+                    "local T = require(p{last}.Shared)\nlocal U = require(p{last}['Other'])\ntype Payload = {{first: T.Item, second: U.Id}}"
+                ));
+                let (ty, dependencies) = imported(
+                    &source,
+                    "export type Item = string",
+                    "export type Id = number",
+                )
+                .unwrap();
+                assert_eq!(ty.to_string(), "{ first: string, second: number }");
+                assert_eq!(dependencies, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn local_require_paths_apply_operations_from_root_to_target() {
+        let source = "local root = game
+local storage = root:GetService('ReplicatedStorage')
+local folder = storage['Shared'].Parent
+local other = folder:WaitForChild('Other', 10)
+local parent = other.Parent
+local T = require(parent:FindFirstChild('Shared'))
+type Payload = T.Item";
+        let (ty, dependencies) = imported(
+            source,
+            "export type Item = string",
+            "export type Item = number",
+        )
+        .unwrap();
+        assert_eq!(ty.to_string(), "string");
+        assert_eq!(dependencies, 1);
+    }
+
+    #[test]
+    fn long_local_require_paths_preserve_invalid_path_errors() {
+        for (root, expected) in [
+            ("p128", "cyclic local in require path"),
+            ("dynamic()", "require path uses a non-static local"),
+            ("game.Parent", "require path goes above game"),
+            (
+                "game.ReplicatedStorage[child]",
+                "computed require paths are not supported",
+            ),
+            (
+                "game.ReplicatedStorage:GetService('ReplicatedStorage')",
+                "GetService must be called on game",
+            ),
+        ] {
+            let source = local_path_chain(root, 128)
+                + "local T = require(p128.Shared)\ntype Payload = T.Item";
+            let error = imported(&source, "export type Item = number", "").unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{root}: {error:#}");
+        }
+        let source = local_path_chain("script.Parent", 128)
+            + "p64 = script.Parent\nlocal T = require(p128.Shared)\ntype Payload = T.Item";
+        let error = imported(&source, "export type Item = number", "").unwrap_err();
+        assert!(format!("{error:#}").contains("require path uses a non-static local"));
+    }
+
     #[test]
     fn follows_transitive_aliases_and_records_every_dependency() {
         let (ty, deps) = imported(
@@ -546,6 +739,47 @@ mod tests {
         .unwrap();
         assert_eq!(ty.to_string(), "number");
         assert_eq!(deps, 2);
+    }
+
+    #[test]
+    fn long_imported_alias_chains_reuse_types_without_false_cycles() {
+        let mut shared = "local T = require('./Other')\ntype A0 = T.Id\n".to_string();
+        for i in 1..=512 {
+            shared.push_str(&format!("type A{i} = A{}\n", i - 1));
+        }
+        shared.push_str("export type Item = {first: A512, second: A512}\n");
+        let (ty, dependencies) = imported(
+            "local T = require('./Shared')\ntype Payload = T.Item",
+            &shared,
+            "export type Id = string",
+        )
+        .unwrap();
+        assert_eq!(ty.to_string(), "{ first: string, second: string }");
+        assert_eq!(dependencies, 2);
+    }
+
+    #[test]
+    fn resolution_recovers_after_a_deep_cycle_or_invalid_type() {
+        let path = Path::new("Test.luau");
+        let map: Node =
+            serde_json::from_value(json!({"name": "test", "className": "DataModel"})).unwrap();
+        let mut source = "type Good = string\ntype A0 = A256\n".to_string();
+        for i in 1..=256 {
+            source.push_str(&format!("type A{i} = A{}\n", i - 1));
+        }
+        source.push_str("type Bad = {Good?}\n");
+        let ast = super::super::parse::syntax(path, &source).unwrap();
+        let mut resolver = Resolver::new(Path::new("."), &map);
+        resolver.add(path, &ast).unwrap();
+        for name in ["A256", "Bad", "Good"] {
+            let alias = resolver.modules[path].aliases[name].0.clone();
+            let result = resolver.payload(path, alias.type_definition());
+            if name == "Good" {
+                assert_eq!(result.unwrap().to_string(), "string");
+            } else {
+                assert!(result.is_err());
+            }
+        }
     }
 
     #[test]

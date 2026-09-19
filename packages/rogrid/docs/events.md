@@ -82,8 +82,8 @@ require helpers and use ordinary Luau.
 
 Every parameter needs an explicit type. Payloads support primitives,
 Roblox values and Instance references, records, arrays, dictionaries, optionals,
-unions, and local or imported aliases. There are at most 16 payload arguments per event. The automatic
-server `Player` does not count toward this limit. See the
+unions, and local or imported aliases. RoGrid imposes no separate payload-argument
+count cap. See the
 [API reference](./api.md#declaration-rules) for the complete rules.
 
 ## Startup
@@ -102,13 +102,13 @@ persistent state; arrange your game's initial state exchange accordingly.
 ## Validation
 
 Generated descriptors drive a shared validator that checks argument types,
-nested shapes, finite components, sizes, and a per-message work limit.
+nested shapes, and finite numeric components.
 Invalid payloads are dropped before the handler runs. RoGrid does not impose
-an event rate limit.
+string or buffer size caps, a validation step budget, or an event rate limit.
 
 These checks do not authorize game actions. Your handler still checks things
 such as ownership, range, purchase permissions, and gameplay cooldowns. See
-[runtime validation](./api.md#runtime-validation) for exact limits and error behavior.
+[runtime validation](./api.md#runtime-validation) for the checks and error behavior.
 
 ## Editing events
 

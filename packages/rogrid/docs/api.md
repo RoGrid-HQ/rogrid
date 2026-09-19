@@ -28,8 +28,8 @@ connect a RemoteEvent; the CLI must generate the project's event code.
   `Player`; it is supplied by Roblox rather than sent in the payload.
 - Use the explicit [payload types](#payload-types) below. Variadic arguments
   and unvalidated types such as `any` are unsupported.
-- A handler can have at most 16 payload arguments, excluding the server's
-  first `Player`. Generic handlers are unsupported.
+- Generic handlers are unsupported. RoGrid imposes no separate cap on the
+  number of payload arguments.
 - Event names and parameter names must be unique within their respective
   table or handler. Parameter names `self` and those beginning `_rogrid` are reserved.
 - Omit the return annotation or use `()`. Events do not return a reply.
@@ -88,7 +88,8 @@ local Types = require(ReplicatedStorage.Shared.Types)
 
 The generator follows Rojo mappings for `game`/`script` paths, dot or string
 indexing, `GetService`, `WaitForChild` (including a timeout), and `FindFirstChild`
-without recursive search. Static locals can hold intermediate paths. String
+without recursive search. Static locals can hold intermediate paths; RoGrid
+does not cap the number of local references followed and rejects cycles. String
 requires support `./`, `../`, `@self/`, and `@game/`, following Roblox Instance
 names from the sourcemap, including renamed modules. See the
 [Roblox require rules](https://create.roblox.com/docs/reference/engine/globals/LuaGlobals#require).
@@ -107,8 +108,10 @@ explicit record containing the data you want to send. Alias names must not
 shadow built-in payload types. Record names and import paths must be UTF-8;
 payload strings can contain arbitrary bytes.
 
-Generation allows at most 32 levels of nesting/alias expansion and 4096
-expanded schema nodes per event. These bounds prevent runaway schemas.
+RoGrid imposes no fixed depth or expansion-size cap on payload types or alias
+chains. Larger expanded types require more generation time and memory.
+Recursive aliases are rejected; Luau's own parsing and compilation limits
+still apply.
 
 ## RoGrid.start
 
@@ -118,8 +121,13 @@ RoGrid.start(): ()
 
 Starts the generated code for the current side, loads receivers, and connects
 their RemoteEvents. Call once on the server and once on each client, before
-firing events. Startup fails if generation is missing, invalid, incompatible
-with the runtime, or inconsistent between the generated files.
+firing events. Startup waits for required modules and RemoteEvents without a
+timeout. If an object never appears, startup keeps waiting. Roblox's built-in
+[`WaitForChild` warning](https://create.roblox.com/docs/reference/engine/classes/Instance#WaitForChild)
+reports waits longer than five seconds without stopping them.
+
+Invalid generation, incorrect object classes, incompatible CLI/runtime
+protocols, and inconsistent generated revisions still raise errors.
 
 Server startup:
 
@@ -173,23 +181,21 @@ automatic retry, or client readiness protocol.
 
 Validation runs on the receiving side before the game handler:
 
-| Check | Limit or behavior |
+| Check | Behavior |
 | --- | --- |
 | Argument count | Extra arguments are rejected. Omitted values are checked as nil, so trailing optional arguments may be omitted. |
 | Argument types | Must match each declared payload type. |
 | Numbers | Must be finite, including numeric components of Roblox value types. |
-| Strings | At most 4096 bytes each. |
-| Buffers | At most 65536 bytes each. |
-| Validation work | 4096 steps per message, shared by all arguments. Each value check, table key scan, union attempt, and sequence keypoint consumes work. |
 
-Invalid payloads are dropped before the handler runs. In Studio,
-invalid payloads warn with the event name and field path, at most once per
-second per event. For a union, the warning includes the first branch's failure.
+Invalid payloads are dropped before the handler runs. In Studio, each invalid
+payload produces a warning with the event name and full field path, including
+repeated failures. For a union, the warning includes the first branch's failure.
 
-Roblox has already deserialized the message when validation runs. These limits
-bound validator work and accepted data; they do not cap incoming bandwidth.
-RoGrid does not impose an event rate limit. Game-specific rate limits,
-authorization, and cooldowns belong in your game code.
+RoGrid does not impose string or buffer size caps, a validation step budget,
+or an event rate limit. Payload size policies, authorization, and cooldowns
+belong in your game code. Validation visits table contents and may try multiple
+union branches, so larger payloads can require more work. Roblox has already
+deserialized the message when validation runs, and handler checks happen afterward.
 
 Handler errors are logged on the receiving side with the event name and
 traceback. They are not returned to the sender. RoGrid does not cancel

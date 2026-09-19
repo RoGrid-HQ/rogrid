@@ -1,3 +1,5 @@
+#[path = "../../config.rs"]
+mod config;
 mod packages;
 mod versions;
 

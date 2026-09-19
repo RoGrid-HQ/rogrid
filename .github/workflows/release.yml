@@ -219,7 +219,10 @@ jobs:
           else
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$RELEASE_SHA" >/dev/null
           fi
-          existing=$(gh release list --limit 100 --json tagName,isDraft --jq ".[] | select(.tagName == \"$tag\") | .isDraft")
+          existing=$(gh api graphql \
+            -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -f tag="$tag" \
+            -f query='query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { isDraft } } }' \
+            --jq '.data.repository.release.isDraft')
           if [ "$existing" = false ]; then
             echo 'This CLI release is already published. Leaving its assets unchanged.'
             exit 0

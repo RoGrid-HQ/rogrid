@@ -1,4 +1,7 @@
 //! Inert command stand-in: all registry data comes from the fixture directory.
+#[path = "../../../config.rs"]
+mod config;
+
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -14,6 +17,14 @@ fn main() {
         writeln!(OpenOptions::new().create(true).append(true).open(root.join("commands.log")).unwrap(), "{entry}").unwrap();
     };
     if tool == "curl" {
+        let connect_timeout = args.windows(2).find(|pair| pair[0] == "--connect-timeout").expect("registry downloads must use the configured connection timeout");
+        assert_eq!(connect_timeout[1], config::REGISTRY_CONNECT_TIMEOUT_SECS.to_string());
+        let download_timeout = args.windows(2).find(|pair| pair[0] == "--max-time").expect("registry downloads must use the configured total timeout");
+        assert_eq!(download_timeout[1], config::REGISTRY_DOWNLOAD_TIMEOUT_SECS.to_string());
+        let retries = args.windows(2).find(|pair| pair[0] == "--retry").expect("registry downloads must use the configured retry count");
+        assert_eq!(retries[1], config::REGISTRY_DOWNLOAD_RETRIES.to_string());
+        let max_filesize = args.windows(2).find(|pair| pair[0] == "--max-filesize").expect("registry downloads must use the configured size limit");
+        assert_eq!(max_filesize[1], config::REGISTRY_DOWNLOAD_MAX_BYTES.to_string());
         let destination = PathBuf::from(&args[args.iter().position(|arg| arg == "--output").unwrap() + 1]);
         let url = args.last().unwrap();
         if url.contains("raw.githubusercontent.com/pesde-pkg/index/") {

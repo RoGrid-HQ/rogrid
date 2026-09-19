@@ -15,6 +15,13 @@ Breaking changes can occur in any release.
 | `playground/` | Game that uses the local CLI and runtime source. |
 | `xtask/` | Maintainer commands for version updates and release verification. |
 
+Shared internal settings live in [`config.rs`](config.rs) at the repository
+root, used by both the CLI and release tooling. Pesde and Wally package names
+each have one regex and a readable error message there; update both together
+when registry rules change. Development timing, parser stack size, release
+settings and the decompressed file size limit also live there. Add future
+internal limits to this file when needed.
+
 ## Local development
 
 Install a stable Rust toolchain, Rokit, and Roblox Studio. From the repository
@@ -69,6 +76,10 @@ Interactive `init` and Ctrl+C tests use a pseudoterminal through the dev-only
 responses in isolated subprocesses; they never upload packages. The registry
 verification timeout test takes about 55 seconds.
 
+`bash .github/tests/release.sh` checks the GitHub release workflow's exact-tag
+lookup and published, draft, missing and failed-lookup branches using an inert
+`gh` command. It runs in Linux CI and does not contact GitHub or publish releases.
+
 For changes to Wally integration or runtime packaging, install Wally 0.3.2
 and Rojo 7.7.0 on PATH and run the opt-in checks:
 
@@ -87,7 +98,8 @@ validator against valid and invalid payloads, including native Roblox values
 implemented by Lune. CI runs this suite in the package checks job.
 It also executes the real runtime with small engine stand-ins to check
 lifecycle guards, validation, diagnostics, and handler-error recovery. These
-stand-ins do not simulate Roblox networking or replication.
+stand-ins use cooperative waits and a simulated clock to check that late
+dependencies resume startup. They do not simulate Roblox networking or replication.
 
 CI also checks generated payload annotations and descriptors with luau-lsp
 1.69.0. To run that check locally, put luau-lsp on PATH, set
@@ -116,7 +128,12 @@ run-in-roblox --place target/payload-tests.rbxlx --script packages/rogrid/tests/
 
 The fixture tests both network directions, including DateTime (absent in Lune),
 Font and shared Model references. It also checks that invalid messages never
-reach the runtime handler and a burst of 100 valid messages is fully delivered.
+reach the runtime handler, each produces a Studio warning, and a burst of 100
+valid messages is fully delivered.
+An additional round trip checks a 3,000-element array, an 8 KiB string, and a
+128 KiB buffer through runtime handlers in both directions.
+The server also delays publishing remotes until twelve seconds after the client
+starts waiting, checking Roblox's own warning and successful startup afterward.
 It opens a temporary Studio test session and exits.
 
 For public startup and multiplayer coverage, set `ROGRID_STUDIO_RUNNER` to the
@@ -137,6 +154,9 @@ and adjust `tests/native.luau`; the Lune suite checks this list stays in sync.
 Class and enum names are generated snapshots from Lune's Roblox reflection
 database. Refresh them with `lune run roblox-types` when updating test tooling.
 Alias resolution and rendering use the same model as validation descriptors.
+Deep-type tests cover long local and imported alias chains, cycle errors,
+iterative rendering and cleanup, and generated Luau that builds nested
+descriptors one layer at a time.
 Keep this model specific to network payloads.
 
 ## Adding a manager

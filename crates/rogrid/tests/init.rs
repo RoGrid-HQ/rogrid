@@ -42,7 +42,8 @@ fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
     let startup = project.join(".rogrid/generated/server/Start.luau");
     assert!(success(dev()).contains("~ server.Lobby.setReady"));
     assert!(text(&callers).contains("id: string"));
-    assert!(text(&startup).contains("dictionary = \"boolean\""));
+    assert!(text(&callers).contains("flags: { [string]: boolean }"));
+    assert!(text(&startup).contains("dictionary = shapes["));
     let first = text(&revision);
     success(dev());
     assert_eq!(
@@ -485,22 +486,46 @@ fn current_directory_and_force_preserve_unrelated_files() {
 
 #[test]
 fn invalid_names_and_local_source_fail_before_writes() {
-    for (pm, name) in [
-        ("wally", "a".repeat(65)),
-        ("pesde", "a".repeat(33)),
-        ("pesde", "123".into()),
+    for (pm, names, message) in [
+        (
+            "wally",
+            vec!["a".repeat(65)],
+            "Wally package names must be 1–64 characters long, using only lowercase letters, digits and dashes",
+        ),
+        (
+            "pesde",
+            vec!["a".repeat(33), "123".into(), "_game".into(), "game-".into()],
+            "Pesde package names must be 1–32 characters long, use only lowercase letters, digits and underscores, not start or end with an underscore or dash, and not contain only digits",
+        ),
     ] {
-        let sandbox = Sandbox::new();
-        failure(
-            sandbox
-                .command(pm, "rokit")
-                .args(["game", "--name", &name])
-                .output()
-                .unwrap(),
-            "package names",
-        );
-        assert!(!sandbox.work.join("game").exists());
-        assert!(sandbox.commands().is_empty());
+        for name in names {
+            let sandbox = Sandbox::new();
+            failure(
+                sandbox
+                    .command(pm, "rokit")
+                    .args(["game", "--name", &name])
+                    .output()
+                    .unwrap(),
+                message,
+            );
+            assert!(!sandbox.work.join("game").exists());
+            assert!(sandbox.commands().is_empty());
+        }
+    }
+    for pm in ["pesde", "wally"] {
+        for name in ["Game", "a/b", "game\n"] {
+            let sandbox = Sandbox::new();
+            failure(
+                sandbox
+                    .command(pm, "rokit")
+                    .args(["game", "--name", name])
+                    .output()
+                    .unwrap(),
+                "project name may only contain lowercase letters, digits, '-' and '_'",
+            );
+            assert!(!sandbox.work.join("game").exists());
+            assert!(sandbox.commands().is_empty());
+        }
     }
     let sandbox = Sandbox::new();
     failure(
