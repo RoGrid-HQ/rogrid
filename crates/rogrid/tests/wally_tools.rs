@@ -60,12 +60,16 @@ fn local_wally_project_generates_and_builds_with_real_tools() {
     assert!(fs::metadata(model).unwrap().len() > 0);
 
     // Wally itself must accept the released dependency's exact version syntax.
+    let runtime: toml::Value =
+        toml::from_str(include_str!("../../../packages/rogrid/pesde.toml")).unwrap();
+    let version = runtime["version"].as_str().unwrap();
+    let dependency = format!("rogrid-hq/rogrid@={version}");
     let starter = fs::read_to_string(project.join("wally.toml")).unwrap();
     fs::write(
         project.join("wally.toml"),
         starter.replace(
             "# RoGrid is mapped from local source in default.project.json.",
-            "rogrid = \"rogrid-hq/rogrid@=0.2.1\"",
+            &format!("rogrid = \"{dependency}\""),
         ),
     )
     .unwrap();
@@ -77,10 +81,7 @@ fn local_wally_project_generates_and_builds_with_real_tools() {
             .unwrap(),
     );
     let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-    assert_eq!(
-        manifest["dependencies"]["rogrid"],
-        "rogrid-hq/rogrid@=0.2.1"
-    );
+    assert_eq!(manifest["dependencies"]["rogrid"], dependency);
 }
 
 #[test]

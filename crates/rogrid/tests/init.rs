@@ -56,15 +56,18 @@ fn initializes(pm: &str, tm: &str, local: bool) {
     );
     assert_eq!(manifest["dependencies"].get("rogrid").is_some(), !local);
     if !local {
+        let runtime: toml::Value =
+            toml::from_str(include_str!("../../../packages/rogrid/pesde.toml")).unwrap();
+        let version = runtime["version"].as_str().unwrap();
         if is_wally {
             assert_eq!(
                 manifest["dependencies"]["rogrid"].as_str(),
-                Some("rogrid-hq/rogrid@=0.2.1")
+                Some(format!("rogrid-hq/rogrid@={version}").as_str())
             );
         } else {
             assert_eq!(
                 manifest["dependencies"]["rogrid"]["version"].as_str(),
-                Some("=0.2.1")
+                Some(format!("={version}").as_str())
             );
         }
     }
