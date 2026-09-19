@@ -41,9 +41,11 @@ When only `--name` is supplied, it also supplies the new folder name. To
 create a project elsewhere, change to its parent directory first. `FOLDER`
 accepts a simple folder name or `.`, not an arbitrary path.
 
-The target must be empty unless `--force` is set. A repository containing
-only `.git` is still nonempty. `--force` overwrites matching starter files;
-it does not merge RoGrid into an existing game.
+The target must be empty apart from an existing `.git` file or folder,
+which is preserved. This lets you initialize a project after `git init` or
+inside an empty Git worktree. Other existing files or folders require
+`--force`, which overwrites matching starter files rather than merging
+RoGrid into an existing game.
 
 The CLI rejects incompatible managers, invalid package names,
 and missing externally supplied tools before writing files. See

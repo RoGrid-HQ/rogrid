@@ -337,9 +337,53 @@ fn failed_codegen_keeps_project_invalid_and_reports_next_step() {
 }
 
 #[test]
+fn current_directory_preserves_git_metadata_without_force() {
+    for pm in ["pesde", "wally"] {
+        for is_directory in [false, true] {
+            let sandbox = Sandbox::new();
+            sandbox.provide("rokit");
+            let git = sandbox.work.join(".git");
+            let metadata = if is_directory {
+                git.clone()
+            } else {
+                sandbox.root.path().join("worktree-metadata")
+            };
+            fs::create_dir(&metadata).unwrap();
+            fs::write(metadata.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            fs::write(metadata.join("config"), "[core]\n\tbare = false\n").unwrap();
+            let pointer = format!("gitdir: {}\n", metadata.display());
+            if !is_directory {
+                fs::write(&git, &pointer).unwrap();
+            }
+
+            success(
+                sandbox
+                    .command(pm, "rokit")
+                    .args([".", "--name", "my-game"])
+                    .output()
+                    .unwrap(),
+            );
+
+            assert_eq!(text(metadata.join("HEAD")), "ref: refs/heads/main\n");
+            assert_eq!(text(metadata.join("config")), "[core]\n\tbare = false\n");
+            if !is_directory {
+                assert_eq!(text(&git), pointer);
+            }
+            assert!(sandbox.work.join(format!("{pm}.toml")).is_file());
+            assert!(
+                text(sandbox.work.join(".rogrid/generated/shared/Server.luau"))
+                    .contains("setReady")
+            );
+        }
+    }
+}
+
+#[test]
 fn current_directory_and_force_preserve_unrelated_files() {
     let sandbox = Sandbox::new();
     sandbox.provide("rokit");
+    fs::create_dir(sandbox.work.join(".git")).unwrap();
+    fs::write(sandbox.work.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     fs::write(sandbox.work.join("keep.txt"), "keep me").unwrap();
     failure(
         sandbox
@@ -350,6 +394,7 @@ fn current_directory_and_force_preserve_unrelated_files() {
         "is not empty",
     );
     assert!(sandbox.commands().is_empty());
+    assert!(!sandbox.work.join("wally.toml").exists());
     success(
         sandbox
             .command("wally", "rokit")
@@ -358,6 +403,10 @@ fn current_directory_and_force_preserve_unrelated_files() {
             .unwrap(),
     );
     assert_eq!(text(sandbox.work.join("keep.txt")), "keep me");
+    assert_eq!(
+        text(sandbox.work.join(".git/HEAD")),
+        "ref: refs/heads/main\n"
+    );
     assert!(sandbox.work.join("wally.toml").is_file());
 }
 
