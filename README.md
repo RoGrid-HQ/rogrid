@@ -59,7 +59,8 @@ Roblox supplies the sending `Player`. The CLI generates argument types and
 payload validation from the handler. Client receivers work the same way, with
 server callers for one player or all players.
 
-Payloads currently support `string`, `boolean`, and `number`. Events send
+Payloads support Roblox values and Instance references, nested tables,
+optionals, unions, and shared type aliases. Events send
 messages without returning replies. Read the [event guide](packages/rogrid/docs/events.md)
 for both directions and the [API reference](packages/rogrid/docs/api.md) for limits.
 

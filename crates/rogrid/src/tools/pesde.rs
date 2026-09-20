@@ -1,4 +1,9 @@
+use std::sync::LazyLock;
+
 use anyhow::{Result, ensure};
+use fancy_regex::Regex;
+
+use crate::config;
 
 use super::{Manifest, PackageManager, ToolManager};
 
@@ -37,24 +42,12 @@ pub const TOOL_MANAGER: ToolManager = ToolManager {
 };
 
 fn package_name(name: &str) -> Result<String> {
+    static RULE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(config::PESDE_PACKAGE_NAME)
+            .expect("invalid Pesde package-name regex in config.rs")
+    });
     let name = name.replace('-', "_");
-    ensure!(
-        (1..=32).contains(&name.len()),
-        "Pesde package names must be 1–32 characters long"
-    );
-    ensure!(
-        name.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
-        "Pesde package names may only contain lowercase letters, digits and underscores"
-    );
-    ensure!(
-        !name.starts_with('_') && !name.ends_with('_'),
-        "Pesde package names cannot start or end with an underscore or dash"
-    );
-    ensure!(
-        !name.chars().all(|c| c.is_ascii_digit()),
-        "Pesde package names cannot contain only digits"
-    );
+    ensure!(RULE.is_match(&name)?, config::PESDE_PACKAGE_NAME_ERROR);
     Ok(name)
 }
 
@@ -64,10 +57,60 @@ mod tests {
 
     #[test]
     fn normalizes_and_validates_manifest_names() {
-        assert_eq!(package_name("my-game_v2").unwrap(), "my_game_v2");
-        assert!(package_name(&"a".repeat(32)).is_ok());
-        for name in ["", "123", "_game", "game-", "Game", "a/b", &"a".repeat(33)] {
-            assert!(package_name(name).is_err(), "{name}");
+        for (input, expected) in [
+            ("a", "a"),
+            ("a0", "a0"),
+            ("0a", "0a"),
+            ("my-game_v2", "my_game_v2"),
+            ("a__b", "a__b"),
+            ("1_2", "1_2"),
+            ("1-2", "1_2"),
+        ] {
+            assert_eq!(package_name(input).unwrap(), expected);
         }
+        for name in [
+            "",
+            "0",
+            "123",
+            "_",
+            "-",
+            "_game",
+            "-game",
+            "game_",
+            "game-",
+            "Game",
+            "a/b",
+            "a.b",
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\n",
+            "\na",
+            "a\r\n",
+            "a\0b",
+            "café",
+            "１２３",
+        ] {
+            assert_eq!(
+                package_name(name).unwrap_err().to_string(),
+                config::PESDE_PACKAGE_NAME_ERROR,
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_length_matches_the_registry_boundary() {
+        for (length, accepted) in [(31, true), (32, true), (33, false)] {
+            for name in [
+                "a".repeat(length),
+                format!("a{}", "0".repeat(length - 1)),
+                format!("{}a", "0".repeat(length - 1)),
+                format!("1{}2", "_".repeat(length - 2)),
+            ] {
+                assert_eq!(package_name(&name).is_ok(), accepted, "{name:?}");
+            }
+        }
+        assert!(package_name(&"0".repeat(32)).is_err());
     }
 }

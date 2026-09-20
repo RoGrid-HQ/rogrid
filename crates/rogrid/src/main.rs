@@ -1,6 +1,8 @@
 mod cli;
 mod codegen;
 mod commands;
+#[path = "../../../config.rs"]
+mod config;
 mod process;
 mod template;
 mod tools;

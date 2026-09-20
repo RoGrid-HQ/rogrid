@@ -59,6 +59,10 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      - name: GitHub release workflow tests
+        if: runner.os == 'Linux'
+        run: bash .github/tests/release.sh
+
       - name: Release metadata
         run: cargo xtask release check
 
@@ -77,6 +81,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - name: Real Wally and Rojo checks
         run: cargo test -p rogrid --locked --test wally_tools -- --ignored
+      - name: Real manager setup and complete generated type checking
+        run: cargo test -p rogrid --locked --test project_tools -- --ignored
+      - name: Payload validator and runtime tests
+        run: lune run test
+      - name: Generated payload type checking
+        run: cargo test -p rogrid --locked payloads_pass_luau_typechecking -- --ignored
+      - name: Generated startup and compatibility guards
+        run: cargo test -p rogrid --locked generated_startup_and_compatibility_guards_execute -- --ignored
       - name: Check both package archives without publishing
         run: cargo xtask release package --output target/release-packages
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

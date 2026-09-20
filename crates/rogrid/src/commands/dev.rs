@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use crate::codegen;
+use crate::{codegen, config};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -64,7 +64,7 @@ pub fn run(args: Args) -> Result<()> {
             .context("could not start rojo; install it and make it available on PATH")?,
     );
     println!(
-        "Watching configured event folders and project settings; restart Studio Play after edits. Ctrl+C stops Rojo."
+        "Watching project Luau sources and settings; restart Studio Play after edits. Ctrl+C stops Rojo."
     );
 
     loop {
@@ -74,17 +74,18 @@ pub fn run(args: Args) -> Result<()> {
             }
             return Ok(());
         }
-        match receive.recv_timeout(Duration::from_millis(250)) {
+        match receive.recv_timeout(Duration::from_millis(config::DEV_ROJO_POLL_MS)) {
             Ok(Change::Stop) => return Ok(()),
             Ok(Change::Files(Ok(event))) if sources.relevant(&event) => {
                 // Let an editor finish its save/rename before reading files again.
-                let mut deadline = Instant::now() + Duration::from_millis(100);
+                let debounce = Duration::from_millis(config::DEV_DEBOUNCE_MS);
+                let mut deadline = Instant::now() + debounce;
                 loop {
                     match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                         Ok(Change::Stop) => return Ok(()),
                         Ok(Change::Files(Err(error))) => return Err(error.into()),
                         Ok(Change::Files(Ok(event))) if sources.relevant(&event) => {
-                            deadline = Instant::now() + Duration::from_millis(100);
+                            deadline = Instant::now() + debounce;
                         }
                         Ok(_) => continue,
                         Err(mpsc::RecvTimeoutError::Timeout) => break,

@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
 
-use crate::{output, run, versions};
+use crate::{config, output, run, versions};
 
 #[derive(Clone, Copy)]
 enum Registry {
@@ -81,6 +81,10 @@ impl Registry {
 
 const REGISTRIES: [Registry; 2] = [Registry::Pesde, Registry::Wally];
 
+#[cfg(test)]
+#[path = "packages_tests.rs"]
+mod workflow_tests;
+
 /// Public, unauthenticated downloads only. HTTP errors must not look like missing versions.
 fn download(url: &str, destination: &Path) -> Result<u16> {
     let status = output(
@@ -94,13 +98,13 @@ fn download(url: &str, destination: &Path) -> Result<u16> {
                 "--proto-redir",
                 "=https",
                 "--connect-timeout",
-                "15",
+                &config::REGISTRY_CONNECT_TIMEOUT_SECS.to_string(),
                 "--max-time",
-                "90",
+                &config::REGISTRY_DOWNLOAD_TIMEOUT_SECS.to_string(),
                 "--retry",
-                "2",
+                &config::REGISTRY_DOWNLOAD_RETRIES.to_string(),
                 "--max-filesize",
-                "10485760",
+                &config::REGISTRY_DOWNLOAD_MAX_BYTES.to_string(),
                 "--header",
                 "Accept: application/octet-stream",
                 "--header",
@@ -157,9 +161,11 @@ fn insert_file(contents: &mut Contents, path: &Path, bytes: Vec<u8>) -> Result<(
 
 fn read_file(reader: impl Read) -> Result<Vec<u8>> {
     let mut data = Vec::new();
-    reader.take(8 * 1024 * 1024 + 1).read_to_end(&mut data)?;
+    reader
+        .take(config::ARCHIVE_FILE_MAX_BYTES + 1)
+        .read_to_end(&mut data)?;
     ensure!(
-        data.len() <= 8 * 1024 * 1024,
+        data.len() as u64 <= config::ARCHIVE_FILE_MAX_BYTES,
         "archive file exceeds size limit"
     );
     Ok(data)
@@ -170,7 +176,6 @@ fn contents(path: &Path) -> Result<Contents> {
     let mut result = BTreeMap::new();
     if bytes.starts_with(b"PK") {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
-        ensure!(archive.len() <= 256, "too many package entries");
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             if file.is_dir() {
@@ -182,8 +187,7 @@ fn contents(path: &Path) -> Result<Contents> {
         }
     } else {
         let mut archive = tar::Archive::new(GzDecoder::new(Cursor::new(bytes)));
-        for (i, entry) in archive.entries()?.enumerate() {
-            ensure!(i < 256, "too many package entries");
+        for entry in archive.entries()? {
             let file = entry?;
             if file.header().entry_type().is_dir() {
                 continue;
@@ -345,9 +349,9 @@ pub fn publish(root: &Path, artifacts: &Path) -> Result<()> {
         run(&mut command)?;
         // Wally 0.3.2 can return exit code zero for an HTTP failure. Check the registry.
         let mut available = false;
-        for attempt in 0..12 {
+        for attempt in 0..config::REGISTRY_VERIFY_ATTEMPTS {
             if attempt > 0 {
-                std::thread::sleep(Duration::from_secs(5));
+                std::thread::sleep(Duration::from_secs(config::REGISTRY_VERIFY_INTERVAL_SECS));
             }
             if existing(&url, &expected, &dir.path().join(registry.archive()))? {
                 available = true;
@@ -393,6 +397,77 @@ pub fn smoke(cli: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_every_file_in_zip_and_tar_packages_with_many_entries() {
+        use std::io::Write;
+
+        for file_count in [257, 1024] {
+            let mut expected = Contents::new();
+            for name in ["src/init.luau", "src/runtime.luau", "README.md", "LICENSE"] {
+                expected.insert(name.into(), b"original\n".to_vec());
+            }
+            for i in expected.len()..file_count {
+                expected.insert(
+                    format!("src/module_{i}.luau"),
+                    format!("return {i}\n").into(),
+                );
+            }
+
+            let dir = tempfile::tempdir().unwrap();
+            let zip_path = dir.path().join("package.zip");
+            let tar_path = dir.path().join("package.tar.gz");
+            let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+            zip.add_directory("src/", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+                fs::File::create(&tar_path).unwrap(),
+                flate2::Compression::default(),
+            ));
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, "src/", std::io::empty())
+                .unwrap();
+
+            for (name, data) in &expected {
+                zip.start_file(name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                zip.write_all(data).unwrap();
+                let mut header = tar::Header::new_gnu();
+                header.set_size(data.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, name, data.as_slice()).unwrap();
+            }
+            zip.finish().unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+
+            assert_eq!(contents(&zip_path).unwrap(), expected);
+            assert_eq!(contents(&tar_path).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn archive_files_up_to_ten_mib_are_accepted() {
+        for size in [0, 8 * 1024 * 1024 + 1, 10 * 1024 * 1024] {
+            let data = read_file(std::io::repeat(b'x').take(size)).unwrap();
+            assert_eq!(data.len() as u64, size);
+        }
+    }
+
+    #[test]
+    fn oversized_archive_files_stop_reading_after_the_first_excess_byte() {
+        let limit = 10 * 1024 * 1024;
+        for size in [limit + 1, limit * 2] {
+            let mut reader = std::io::repeat(b'x').take(size);
+            let error = read_file(&mut reader).unwrap_err();
+            assert_eq!(error.to_string(), "archive file exceeds size limit");
+            assert_eq!(reader.limit(), size - (limit + 1));
+        }
+    }
 
     #[test]
     fn compares_payloads_not_archive_metadata_or_checkout_line_endings() {

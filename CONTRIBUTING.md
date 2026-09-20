@@ -15,6 +15,13 @@ Breaking changes can occur in any release.
 | `playground/` | Game that uses the local CLI and runtime source. |
 | `xtask/` | Maintainer commands for version updates and release verification. |
 
+Shared internal settings live in [`config.rs`](config.rs) at the repository
+root, used by both the CLI and release tooling. Pesde and Wally package names
+each have one regex and a readable error message there; update both together
+when registry rules change. Development timing, parser stack size, release
+settings and the decompressed file size limit also live there. Add future
+internal limits to this file when needed.
+
 ## Local development
 
 Install a stable Rust toolchain, Rokit, and Roblox Studio. From the repository
@@ -44,6 +51,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace --release
+lune run test
 ```
 
 CI runs formatting, Clippy, tests, and a release build on Linux, macOS, and
@@ -61,6 +69,17 @@ and failure recovery. They run the real CLI against small native stand-ins
 for external tools, using temporary directories and an isolated home and
 PATH. They do not download registry packages.
 
+The suite also runs `dev` against real filesystem notifications and a stand-in
+Rojo process, checking regeneration, invalid-source recovery, and shutdown.
+Interactive `init` and Ctrl+C tests use a pseudoterminal through the dev-only
+`portable-pty` dependency. Release tests use inert installers and registry
+responses in isolated subprocesses; they never upload packages. The registry
+verification timeout test takes about 55 seconds.
+
+`bash .github/tests/release.sh` checks the GitHub release workflow's exact-tag
+lookup and published, draft, missing and failed-lookup branches using an inert
+`gh` command. It runs in Linux CI and does not contact GitHub or publish releases.
+
 For changes to Wally integration or runtime packaging, install Wally 0.3.2
 and Rojo 7.7.0 on PATH and run the opt-in checks:
 
@@ -71,6 +90,74 @@ cargo test -p rogrid --test wally_tools -- --ignored
 These exercise real local-framework setup, a Rojo build, exact dependency
 parsing, and package contents without publishing. Check startup in Studio
 separately when changing runtime behavior or package layout.
+
+### Payload tests and types
+
+Repository `rokit.toml` pins Lune 0.10.5. `lune run test` runs the real shared
+validator against valid and invalid payloads, including native Roblox values
+implemented by Lune. CI runs this suite in the package checks job.
+It also executes the real runtime with small engine stand-ins to check
+lifecycle guards, validation, diagnostics, and handler-error recovery. These
+stand-ins use cooperative waits and a simulated clock to check that late
+dependencies resume startup. They do not simulate Roblox networking or replication.
+
+CI also checks generated payload annotations and descriptors with luau-lsp
+1.69.0. To run that check locally, put luau-lsp on PATH, set
+`ROGRID_ROBLOX_DEFINITIONS` to its Roblox `globalTypes.d.luau` definitions file,
+and run `cargo test -p rogrid payloads_pass_luau_typechecking -- --ignored`.
+
+With Wally, Pesde, Rojo, and the same typechecker setup installed,
+`cargo test -p rogrid --test project_tools -- --ignored` initializes real local
+framework projects with both managers, builds them, and typechecks complete
+generated modules. To execute fresh generator output under Lune, including
+protocol and revision mismatch checks, run:
+
+```sh
+cargo test -p rogrid generated_startup_and_compatibility_guards_execute -- --ignored
+```
+
+Both checks run in the package CI job.
+
+For real Roblox transport and runtime dispatch, use Studio and Rojo's
+`run-in-roblox` 0.3.0:
+
+```sh
+rojo build packages/rogrid/tests/studio.project.json --output target/payload-tests.rbxlx
+run-in-roblox --place target/payload-tests.rbxlx --script packages/rogrid/tests/studio-run.luau
+```
+
+The fixture tests both network directions, including DateTime (absent in Lune),
+Font and shared Model references. It also checks that invalid messages never
+reach the runtime handler, each produces a Studio warning, and a burst of 100
+valid messages is fully delivered.
+An additional round trip checks a 3,000-element array, an 8 KiB string, and a
+128 KiB buffer through runtime handlers in both directions.
+The server also delays publishing remotes until twelve seconds after the client
+starts waiting, checking Roblox's own warning and successful startup afterward.
+It opens a temporary Studio test session and exits.
+
+For public startup and multiplayer coverage, set `ROGRID_STUDIO_RUNNER` to the
+absolute path of `run-in-roblox`, then run:
+
+```sh
+cargo test -p rogrid --test studio -- --ignored
+```
+
+This test uses real Wally initialization and generated callers in two-client
+Studio sessions, through direct and linked package imports. It checks targeted
+delivery, broadcasts, sender identity, invalid client-bound payloads, and
+handler-error recovery. Studio tests run separately from normal CI.
+
+The network type model lives in `codegen/types.rs`; built-in runtime checks
+live in `packages/rogrid/src/validate.luau`. Add/remove a leaf in those two places
+and adjust `tests/native.luau`; the Lune suite checks this list stays in sync.
+Class and enum names are generated snapshots from Lune's Roblox reflection
+database. Refresh them with `lune run roblox-types` when updating test tooling.
+Alias resolution and rendering use the same model as validation descriptors.
+Deep-type tests cover long local and imported alias chains, cycle errors,
+iterative rendering and cleanup, and generated Luau that builds nested
+descriptors one layer at a time.
+Keep this model specific to network payloads.
 
 ## Adding a manager
 
@@ -94,10 +181,12 @@ level-one title and `sidebar_position` frontmatter for ordering. Use relative
 links such as `events.md`, including anchors where useful, and update the
 README's documentation list when adding a guide.
 
-Document behavior that exists and distinguish source-only features from
-published releases. Keep [project status](packages/rogrid/docs/status.md)
-current when releasing. Do not use em dashes or promise that breaking changes
-end at a particular version.
+Document the behavior of the code in this checkout. Update feature docs with
+the implementation and describe supported functionality in the present tense.
+User-facing docs ship with the release; keep release preparation notes and
+version bookkeeping in maintainer documentation. Keep
+[project status](packages/rogrid/docs/status.md) current. Do not use em dashes
+or promise that breaking changes end at a particular version.
 
 ## Releases
 

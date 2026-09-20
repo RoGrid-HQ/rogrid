@@ -7,6 +7,6 @@ license = "MIT"
 repository = "https://github.com/RoGrid-HQ/rogrid"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
-exclude = ["pesde.toml", "pesde.lock", "package.tar.gz"]
+exclude = ["pesde.toml", "pesde.lock", "package.tar.gz", "tests/**"]
 
 [dependencies]

@@ -53,14 +53,30 @@ For missing folders or ambiguous ModuleScripts, check
 [event folders and Rojo mapping](./configuration.md). Every receiver must map
 exactly once to a supported location.
 
-## Studio reports missing or stale generated files
+## Startup keeps waiting or reports stale generated files
+
+Startup waits without a timeout for required objects. Roblox's "Infinite yield
+possible" warning identifies the object still being awaited; it does not stop
+the wait. For `RoGridEvents`, check that server startup runs and has no errors.
+For package, generated, or receiver modules, check installation and Rojo mappings.
 
 Run `rogrid dev --once` successfully, reconnect Rojo if needed, and restart
 Play. Check the generated mappings in `default.project.json` and the installed
 runtime at `ReplicatedStorage.Packages.rogrid`.
 
-An incompatible runtime requires matching CLI and runtime versions. Running
-generation does not update installed packages. See [release availability](./status.md#release-availability).
+Generated code and the runtime must use the same internal protocol. Install a
+compatible CLI/runtime pair, regenerate, and restart Play. Running generation
+does not update installed packages. For framework development, use the same
+checkout's CLI and runtime through `--local-framework` or the playground.
+
+## A payload is dropped
+
+In Studio, check Output for `RoGrid dropped` followed by the event and field
+path. Field names are shown in full. Verify required fields, array density, and the
+[payload rules and limits](./api.md#runtime-validation). Records reject extra
+fields even when Luau accepts the wider table type. Instance references must
+be visible to the receiver. Each invalid payload produces a warning in Studio,
+including repeated failures.
 
 ## Caller types are missing in the editor
 

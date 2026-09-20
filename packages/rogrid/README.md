@@ -47,8 +47,9 @@ Server.Lobby.setReady.fire(true)
 ```
 
 Server handlers receive the sending `Player` automatically. Payload arguments
-support `string`, `boolean`, and `number`. Client receivers generate server
-callers with `.fire(player, ...)` and `.fireAll(...)`.
+support primitives, Roblox values and Instance references, nested tables,
+optionals, unions, and aliases. Client receivers generate server callers with
+`.fire(player, ...)` and `.fireAll(...)`.
 
 ## Documentation
 
