@@ -37,7 +37,7 @@ pub const ROJO: &str = "rojo=rojo-rbx/rojo@7.7.0";
 pub const ROGRID: &str = concat!("rogrid=RoGrid-HQ/rogrid@", env!("CARGO_PKG_VERSION"));
 
 /// Runtime release expected by this CLI, independent of the CLI's own version.
-pub const FRAMEWORK_VERSION: &str = "0.2.2";
+pub const FRAMEWORK_VERSION: &str = "0.3.0";
 
 #[derive(Clone, Copy)]
 pub struct Manifest {
