@@ -1,6 +1,6 @@
 [package]
 name = "rogrid-hq/rogrid"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["JustSammyyy"]
 description = "The RoGrid core library"
 license = "MIT"
