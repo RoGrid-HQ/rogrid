@@ -26,6 +26,16 @@ pub const DEV_ROJO_POLL_MS: u64 = 250;
 /// Stack space for the recursive Luau parser (16 MiB).
 pub const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
 
+/// Roblox drops larger UnreliableRemoteEvent payloads after engine encoding.
+/// Reference: https://create.roblox.com/docs/reference/engine/classes/UnreliableRemoteEvent
+/// This records an engine constraint; RoGrid does not estimate or enforce wire sizes.
+pub const ROBLOX_UNRELIABLE_PAYLOAD_BYTES: usize = 1000;
+
+/// Approximate Roblox client-to-server rate, shared among remotes of the same type.
+/// Reference: https://create.roblox.com/docs/reference/engine/classes/UnreliableRemoteEvent
+/// Roblox performs throttling. This is not a RoGrid traffic policy.
+pub const ROBLOX_REMOTE_EVENTS_PER_SECOND_PER_CLIENT: usize = 500;
+
 /// Seconds allowed to establish a registry connection during release checks.
 pub const REGISTRY_CONNECT_TIMEOUT_SECS: u64 = 30;
 

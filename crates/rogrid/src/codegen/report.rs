@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::{Module, emit};
+use super::{EndpointKind, Module, emit};
 
 /// Public event signatures, without handler bodies or generated implementation details.
 pub type Inventory = BTreeMap<String, String>;
@@ -10,13 +10,21 @@ pub fn inventory(modules: &[Module]) -> Inventory {
     modules
         .iter()
         .flat_map(|module| {
-            module.events.iter().map(move |event| {
+            module.endpoints.iter().map(move |event| {
                 let signature = event
                     .args
                     .iter()
                     .map(|arg| format!("{}: {}", arg.name, arg.ty))
                     .collect::<Vec<_>>()
                     .join(", ");
+                let signature = match &event.kind {
+                    EndpointKind::Event(reliability) => {
+                        format!("event {} ({signature})", reliability.name())
+                    }
+                    EndpointKind::Request(returns) => {
+                        format!("request ({signature}) -> {}", emit::returns(returns))
+                    }
+                };
                 (emit::id(module, event), signature)
             })
         })
@@ -56,7 +64,11 @@ impl Report {
 
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let noun = if self.count == 1 { "event" } else { "events" };
+        let noun = if self.count == 1 {
+            "endpoint"
+        } else {
+            "endpoints"
+        };
         write!(f, "Generated {} typed {noun}.", self.count)?;
         for (name, change) in &self.changes {
             write!(f, "\n  {change} {name}")?;
@@ -83,11 +95,11 @@ mod tests {
         ]);
         assert_eq!(
             Report::between(&before, &after).to_string(),
-            "Generated 3 typed events.\n  + client.Notice.show\n  ~ server.Shop.buy\n  - server.Shop.sell"
+            "Generated 3 typed endpoints.\n  + client.Notice.show\n  ~ server.Shop.buy\n  - server.Shop.sell"
         );
         assert_eq!(
             Report::between(&after, &after).to_string(),
-            "Generated 3 typed events."
+            "Generated 3 typed endpoints."
         );
     }
 
@@ -97,15 +109,15 @@ mod tests {
         let one = Inventory::from([("server.Lobby.ready".into(), String::new())]);
         assert_eq!(
             Report::between(&empty, &empty).to_string(),
-            "Generated 0 typed events."
+            "Generated 0 typed endpoints."
         );
         assert_eq!(
             Report::between(&empty, &one).to_string(),
-            "Generated 1 typed event.\n  + server.Lobby.ready"
+            "Generated 1 typed endpoint.\n  + server.Lobby.ready"
         );
         assert_eq!(
             Report::between(&one, &empty).to_string(),
-            "Generated 0 typed events.\n  - server.Lobby.ready"
+            "Generated 0 typed endpoints.\n  - server.Lobby.ready"
         );
     }
 }

@@ -21,9 +21,9 @@ cargo run --manifest-path ../Cargo.toml -p rogrid -- dev
 ```
 
 Install the plugin only once. In Studio, open a place and connect the Rojo
-plugin to the running server, then press Play. The client sends its ready
-status to the server, which sets the player's `Ready` attribute and sends a
-notification back to the clients. Look for the ready message in Studio's
+plugin to the running server, then press Play. The client requests its current
+ready status, then sends a ready event. The server sets the player's `Ready`
+attribute and sends a notification to the clients. Look for both messages in Studio's
 Output window. That example lives in `src/client/ReadyDemo.luau`, called after
 `RoGrid.start()` from the small client entry script. Remove that call when you
 want only framework startup. Use a fresh place: Rojo manages the mapped script
@@ -32,12 +32,12 @@ folders.
 Open **the `playground` folder** in VS Code and install the recommended Luau
 Language Server extension. Its settings use this game's Rojo map, including
 the framework source outside the folder. Start generation before expecting
-autocomplete for event callers. You can also start the CLI with **Terminal →
+autocomplete for generated callers. You can also start the CLI with **Terminal →
 Run Task → RoGrid: develop playground**.
 
 ## Editing
 
-- Change event declarations under `src/` to try game events. The CLI regenerates
+- Change event and request declarations under `src/`. The CLI regenerates
   callers automatically. It also watches other project Luau sources so shared
   type edits regenerate callers. Rojo syncs the game code.
 - To use different or multiple event folders, add `rogrid.toml` with an `[events]`

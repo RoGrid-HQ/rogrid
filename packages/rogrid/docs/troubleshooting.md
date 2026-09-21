@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 8
 ---
 
 # Troubleshooting
@@ -46,7 +46,9 @@ If `rogrid init --help` does not list `wally`, update the CLI. See
 
 Read the file and line in the CLI error. Check the
 [declaration rules](./api.md#declaration-rules), especially inline handlers,
-explicit parameter types, and the first `Player` parameter on server events.
+explicit parameter types, and the first `Player` parameter on server receivers.
+Requests also need an explicit return annotation, including `()` when no
+values are returned.
 Keep helper modules outside event folders.
 
 For missing folders or ambiguous ModuleScripts, check
@@ -57,7 +59,7 @@ exactly once to a supported location.
 
 Startup waits without a timeout for required objects. Roblox's "Infinite yield
 possible" warning identifies the object still being awaited; it does not stop
-the wait. For `RoGridEvents`, check that server startup runs and has no errors.
+the wait. For `RoGridRemotes`, check that server startup runs and has no errors.
 For package, generated, or receiver modules, check installation and Rojo mappings.
 
 Run `rogrid dev --once` successfully, reconnect Rojo if needed, and restart
@@ -71,12 +73,37 @@ checkout's CLI and runtime through `--local-framework` or the playground.
 
 ## A payload is dropped
 
-In Studio, check Output for `RoGrid dropped` followed by the event and field
+In Studio, check Output for `RoGrid dropped` followed by the endpoint and field
 path. Field names are shown in full. Verify required fields, array density, and the
 [payload rules and limits](./api.md#runtime-validation). Records reject extra
 fields even when Luau accepts the wider table type. Instance references must
 be visible to the receiver. Each invalid payload produces a warning in Studio,
 including repeated failures.
+
+## A request fails or keeps waiting
+
+Wrap `.invoke(...)` in `pcall` and inspect the error's `code` field. See
+[request failures](./requests.md#handle-failures) for each code. `HandlerError`
+and invalid handler results have server-side diagnostics in Output.
+
+The timeout belongs after all declared payload arguments. Supply `nil` for
+optional payload positions you want to skip. A call without a timeout keeps
+waiting if the handler never finishes or a response cannot be delivered.
+Check whether the handler is waiting for a game condition or another service.
+
+A `Timeout` does not cancel the handler or undo its work. Check the operation's
+state before retrying a request that changes game data.
+
+## Unreliable updates are missing or out of order
+
+Unreliable events can lose messages or deliver them out of order. Keep each
+update useful on its own, and include a sequence number when stale updates
+must be ignored. Use reliable events or requests when each message matters.
+
+Roblox drops unreliable payloads above its encoded size limit and may throttle
+high send rates. Check Studio Output for engine diagnostics and reduce the
+payload or send frequency in your game code. See
+[unreliable events](./events.md#unreliable-events) for Roblox's documented limits.
 
 ## Caller types are missing in the editor
 

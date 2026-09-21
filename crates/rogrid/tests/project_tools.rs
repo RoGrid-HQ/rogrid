@@ -99,5 +99,39 @@ fn real_manager_projects_build_and_complete_generated_modules_typecheck() {
                 .output()
                 .unwrap(),
         );
+        let incorrect = project.join("src/client/Incorrect.luau");
+        fs::write(
+            &incorrect,
+            r#"--!strict
+local Server = require(game:GetService("ReplicatedStorage").RoGridGenerated.Server)
+local wrongResult: string = Server.Lobby.inspect.invoke({id = "hello"})
+Server.Lobby.inspect.invoke("wrong argument")
+Server.Lobby.acknowledge.invoke("wrong timeout")
+return wrongResult
+"#,
+        )
+        .unwrap();
+        let rejected = Command::new("luau-lsp")
+            .current_dir(&project)
+            .args([
+                "analyze",
+                "--platform=roblox",
+                "--sourcemap=sourcemap.json",
+                "--definitions",
+            ])
+            .arg(&definitions)
+            .arg("src/client/Incorrect.luau")
+            .output()
+            .unwrap();
+        let diagnostics = format!(
+            "{}{}",
+            String::from_utf8_lossy(&rejected.stdout),
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        assert!(
+            !rejected.status.success() && diagnostics.matches("TypeError").count() >= 3,
+            "{diagnostics}"
+        );
+        fs::remove_file(incorrect).unwrap();
     }
 }

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Configuration
@@ -20,6 +20,8 @@ client = ["src/client/events"]
 
 Each list replaces that side's defaults. An omitted side keeps its default;
 an empty list, such as `client = []`, disables discovery for that side.
+Server folders accept both event and request declarations. Client folders
+accept event declarations.
 
 Folders must exist inside the project. Use project-relative paths without a
 leading `./` or any `..` components, and keep them outside `.git` and `.rogrid`.
@@ -71,8 +73,8 @@ The runtime must be available as `ReplicatedStorage.Packages.rogrid`. The
 starter configures this for the selected [package manager](./package-managers.md).
 
 Do not edit or commit `.rogrid/`. It can be regenerated from source. The
-`.rogrid/events.json` cache records the previous successful event inventory;
-without it, all current events are reported as added.
+`.rogrid/endpoints.json` cache records the previous successful endpoint inventory;
+without it, all current events and requests are reported as added.
 
 ## Editor settings
 

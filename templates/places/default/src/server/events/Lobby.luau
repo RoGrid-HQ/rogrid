@@ -5,6 +5,9 @@ local RoGrid = require(ReplicatedStorage.Packages.rogrid)
 local Client = require(ServerScriptService.RoGridGenerated.Client)
 
 return {
+    getReady = RoGrid.request(function(player: Player): boolean
+        return player:GetAttribute("Ready") == true
+    end),
     setReady = RoGrid.event(function(player: Player, ready: boolean)
         if player:GetAttribute("Ready") == ready then
             return

@@ -14,28 +14,28 @@ end
 local runtime = RoGrid._runtime
 local waitWarning = false
 local warningConnection = game:GetService("LogService").MessageOut:Connect(function(message, kind)
-    if kind == Enum.MessageType.MessageWarning and string.find(message, "RoGridEvents", 1, true) then
+    if kind == Enum.MessageType.MessageWarning and string.find(message, "RoGridRemotes", 1, true) then
         waitWarning = true
     end
 end)
 local beganWaiting = os.clock()
 probe:FireServer("waiting")
-runtime.begin("client", "test", { "server.Tests.send", "client.Tests.reply", "server.Tests.large", "client.Tests.largeReply" })
+runtime.begin("client", "test", require(ReplicatedStorage.Definitions))
 warningConnection:Disconnect()
 if not waitWarning or os.clock() - beganWaiting < 10 then
-    probe:FireServer("failure", "expected an engine warning and successful startup after the former deadline")
+    probe:FireServer("failure", "expected an engine warning and successful startup after delayed publication")
 end
 runtime.bind("client.Tests.reply", function(item)
     assert(item.id == "ok")
     runtimeReplies += 1
     finish()
-end, { { name = "item", shape = { record = { id = "string" } } } })
+end)
 runtime.bind("client.Tests.largeReply", function(payload)
     assert(#payload.heights == 3000 and payload.heights[3000] == 42 and #payload.text == 8192)
     assert(buffer.len(payload.bytes) == 131072 and buffer.readu8(payload.bytes, 131071) == 7)
     largeReplies += 1
     finish()
-end, { { name = "payload", shape = { record = { heights = { array = "number" }, text = "string", bytes = "buffer" } } } })
+end)
 runtime.finish()
 probe.OnClientEvent:Connect(function(name, value)
     local shape = if name == "Instance" then { instance = "Model" } else name
@@ -48,7 +48,7 @@ runtime.fireServer("server.Tests.send", "test", { id = 1 })
 runtime.fireServer("server.Tests.send", "test", { id = "bad", [string.rep("a", 63) .. "é_tail"] = true })
 runtime.fireServer("server.Tests.send", "test")
 runtime.fireServer("server.Tests.send", "test", { id = "bad" }, nil, nil)
--- A burst above the former 60-message limit must reach the handler in full.
+-- Every reliable message in the burst must reach its handler.
 for _ = 1, 100 do
     runtime.fireServer("server.Tests.send", "test", { id = "ok" })
 end

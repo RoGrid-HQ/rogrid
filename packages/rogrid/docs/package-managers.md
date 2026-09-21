@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Package managers
@@ -57,7 +57,7 @@ rogrid dev
 ```
 
 Rokit installs the pinned CLI, Wally, and Rojo. Wally installs the framework,
-and RoGrid generates the initial event interfaces. To develop the framework
+and RoGrid generates the initial callers. To develop the framework
 itself, use [local framework setup](./cli.md#local-framework).
 
 With `--tool-manager none`, Wally and Rojo must already run on PATH. The CLI

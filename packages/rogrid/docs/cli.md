@@ -1,10 +1,10 @@
 ---
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # CLI reference
 
-RoGrid has two commands: `init` creates a project, and `dev` generates event
+RoGrid has two commands: `init` creates a project, and `dev` generates network
 interfaces and runs the development server. Use `rogrid --help` or a command's
 `--help` flag to inspect the installed binary.
 
@@ -18,7 +18,7 @@ rogrid init [FOLDER] [OPTIONS]
 ```
 
 Creates a starter project, writes manager manifests, installs tools and
-packages, and generates event code. Missing choices are prompted for.
+packages, and generates event and request code. Missing choices are prompted for.
 
 | Argument or option | Description |
 | --- | --- |
