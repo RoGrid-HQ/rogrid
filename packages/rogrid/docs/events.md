@@ -5,7 +5,9 @@ sidebar_position: 2
 # Events
 
 Declare an event on the side that handles it. RoGrid generates a typed caller
-for the other side and connects the receiver to a RemoteEvent during startup.
+for the other side and connects the receiver during startup. Events send
+messages without returning a result; use [requests](./requests.md) when the
+client needs a reply from the server.
 The examples below use the project from [getting started](./getting-started.md).
 
 ## Client to server
@@ -69,6 +71,36 @@ Client.Notifications.show.fireAll("A new round is starting!")
 
 Use a dot for `.fire(...)` and `.fireAll(...)`. These are plain functions.
 
+## Unreliable events
+
+For transient updates where loss or reordering is acceptable, choose
+unreliable delivery in the declaration:
+
+```luau
+return {
+    aim = RoGrid.event(function(player: Player, direction: Vector3)
+        -- Apply this aiming sample to the game's server-side state.
+    end, { reliability = "unreliable" }),
+}
+```
+
+Call it with the same `.fire(...)` method. Client receivers also support
+unreliable delivery with `.fire(player, ...)` and `.fireAll(...)`.
+Omitting the options table, or using `{ reliability = "reliable" }`, selects
+ordinary `RemoteEvent` delivery. Reliability is fixed by the declaration.
+
+`UnreliableRemoteEvent` messages can be lost or arrive out of order. Send
+independent samples and include a sequence number when your game needs to
+ignore older samples. Use reliable messages for changes that must arrive.
+
+Roblox drops unreliable payloads larger than **1,000 bytes** after engine
+encoding. Studio reports oversized messages in Output. Encoding and
+compression make a generic pre-send size estimate unreliable. Roblox also
+documents an approximate client-to-server rate of 500 messages per second
+per client, shared among remotes of the same type. RoGrid adds no throttle
+or payload-size check. See the
+[Roblox reference](https://create.roblox.com/docs/reference/engine/classes/UnreliableRemoteEvent).
+
 ## Declarations
 
 Event files are plain ModuleScripts directly inside an
@@ -76,7 +108,8 @@ Event files are plain ModuleScripts directly inside an
 such as `Lobby.luau`. Do not use `init.luau`, `.server.luau`, or `.client.luau`.
 
 Each module returns one literal table of named `RoGrid.event(function(...) ... end)`
-declarations. Use the local name `RoGrid` and inline functions so the generator
+declarations. Server modules can also include `RoGrid.request` declarations.
+Use the local name `RoGrid` and inline functions so the generator
 can recognize them. Keep helper modules outside event folders; handlers can
 require helpers and use ordinary Luau.
 
@@ -113,8 +146,9 @@ such as ownership, range, purchase permissions, and gameplay cooldowns. See
 ## Editing events
 
 `rogrid dev` regenerates callers when declarations change. It reports `+` for
-added events, `-` for removed events, and `~` for changed argument names or
-types. Handler-body edits do not appear in that report.
+added endpoints, `-` for removed endpoints, and `~` for changed argument names or
+types, reliability, request return types, or declaration kind. Handler-body
+edits do not appear in that report.
 
 Fix generation errors before starting Play. Restart Play after changes so
 Roblox reloads modules. For a place build, run `rogrid dev --once` first.

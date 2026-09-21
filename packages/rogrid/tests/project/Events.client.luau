@@ -4,6 +4,10 @@ local Players = game:GetService("Players")
 local RoGrid = require(ReplicatedStorage.Packages.rogrid)
 
 return {
+    pose = RoGrid.event(function(sequence: number, position: Vector3)
+        assert(position == Vector3.new(1, 2, 3))
+        Players.LocalPlayer:SetAttribute("ClientPose", sequence)
+    end, { reliability = "unreliable" }),
     targeted = RoGrid.event(function(recipient: Player, message: string)
         assert(recipient == Players.LocalPlayer, "targeted event reached another player")
         assert(message == "hello", "invalid server payload reached the handler")

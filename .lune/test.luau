@@ -1,5 +1,6 @@
 require("../packages/rogrid/tests/validate")
 require("../packages/rogrid/tests/runtime")
+require("../packages/rogrid/tests/requests")
 local fs = require("@lune/fs")
 local native = require("../packages/rogrid/tests/native")(require("@lune/roblox"))
 local names = {}

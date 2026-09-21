@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Getting started
 
-Create a Roblox project with generated event callers, a Rojo configuration,
+Create a Roblox project with typed networking, a Rojo configuration,
 and a small working example.
 
 > RoGrid is unfinished and under active development. Breaking changes can
@@ -37,7 +37,7 @@ cd my-game
 ```
 
 The CLI creates the folder, writes the project files, installs tools and
-packages, and generates the initial event interfaces. Omit the manager flags
+packages, and generates the initial callers. Omit the manager flags
 to choose interactively. See the [CLI reference](./cli.md) for all options.
 
 ## 3. Connect Studio
@@ -55,10 +55,11 @@ rogrid dev
 ```
 
 Open a place in Studio and connect the Rojo plugin to the running server.
-Press **Play**. The starter sends the player's ready status to the server,
-sets their `Ready` attribute, and prints a notification in Output.
+Press **Play**. The starter requests the player's current ready status, then
+sends a ready event. The server sets the player's `Ready` attribute and sends
+a notification that is printed in Output.
 
-Keep `rogrid dev` running while editing. It generates event interfaces and
+Keep `rogrid dev` running while editing. It generates event and request callers and
 runs Rojo to sync files. Restart Play after Luau changes to load the new code.
 Ctrl+C stops the command and its Rojo process.
 
@@ -108,5 +109,6 @@ ignored by the starter.
 ## Next steps
 
 - [Events](./events.md): send messages between the client and server.
+- [Requests](./requests.md): call server handlers and receive typed results.
 - [Configuration](./configuration.md): change where your receivers live.
 - [Troubleshooting](./troubleshooting.md): resolve setup and startup errors.

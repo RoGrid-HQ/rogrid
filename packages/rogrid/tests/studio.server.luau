@@ -21,7 +21,7 @@ game:GetService("LogService").MessageOut:Connect(function(message, kind)
     end
 end)
 local runtime = RoGrid._runtime
-runtime.begin("server", "test", { "server.Tests.send", "client.Tests.reply", "server.Tests.large", "client.Tests.largeReply" })
+runtime.begin("server", "test", require(ReplicatedStorage.Definitions))
 runtime.bind("server.Tests.send", function(player, item, note)
     handled += 1
     if item.id ~= "ok" or note ~= nil or not player:IsA("Player") then
@@ -29,7 +29,7 @@ runtime.bind("server.Tests.send", function(player, item, note)
         return
     end
     runtime.fireClient("client.Tests.reply", "test", player, item)
-end, { { name = "item", shape = { record = { id = "string" } } }, { name = "note", shape = { optional = "string" } } })
+end)
 runtime.bind("server.Tests.large", function(player, payload)
     largeHandled += 1
     if #payload.heights ~= 3000 or payload.heights[3000] ~= 42 or #payload.text ~= 8192
@@ -37,10 +37,10 @@ runtime.bind("server.Tests.large", function(player, payload)
         table.insert(failures, "large payload changed in transit")
     end
     runtime.fireClient("client.Tests.largeReply", "test", player, payload)
-end, { { name = "payload", shape = { record = { heights = { array = "number" }, text = "string", bytes = "buffer" } } } })
+end)
 probe.OnServerEvent:Connect(function(player, name, value)
     if name == "waiting" then
-        -- A test-only delay beyond the former startup timeout.
+        -- Keep startup waiting long enough to exercise the engine warning.
         task.delay(12, runtime.finish)
         return
     end

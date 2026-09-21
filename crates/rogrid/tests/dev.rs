@@ -148,7 +148,7 @@ fn regeneration_tracks_event_additions_removals_signatures_and_body_only_edits()
         "return { renamed = RoGrid.event(function(player: Player, id: string) print(id) end) }",
     )
     .unwrap();
-    assert_eq!(project.once().trim(), "Generated 2 typed events.");
+    assert_eq!(project.once().trim(), "Generated 2 typed endpoints.");
     assert_ne!(text(project.revision()), revision);
     fs::write(
         project.lobby(),
@@ -167,7 +167,7 @@ fn regeneration_tracks_event_additions_removals_signatures_and_body_only_edits()
     )
     .unwrap();
     let report = project.once();
-    assert!(report.contains("Generated 0 typed events."));
+    assert!(report.contains("Generated 0 typed endpoints."));
     assert!(report.contains("- server.Lobby.setReady"));
     assert!(!text(project.caller()).contains("Lobby"));
 }
@@ -179,7 +179,7 @@ fn unchanged_generation_preserves_timestamps_and_removes_only_obsolete_output() 
     let paths: Vec<_> = [
         project.caller(),
         project.revision(),
-        project.root.join(".rogrid/events.json"),
+        project.root.join(".rogrid/endpoints.json"),
         project.root.join("default.project.json"),
         project.root.join(".vscode/settings.json"),
     ]
@@ -217,7 +217,7 @@ fn unchanged_generation_preserves_timestamps_and_removes_only_obsolete_output() 
 #[test]
 fn absent_or_corrupt_inventory_is_rebuilt_and_failed_writes_block_startup() {
     let project = Project::new();
-    let inventory = project.root.join(".rogrid/events.json");
+    let inventory = project.root.join(".rogrid/endpoints.json");
     for content in [None, Some("invalid json"), Some("[]")] {
         if let Some(content) = content {
             fs::write(&inventory, content).unwrap();

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 8
+sidebar_position: 9
 ---
 
 # Project status
@@ -24,6 +24,8 @@ runtime protocol and generated revisions during startup.
 
 - Project initialization with package and tool manifests.
 - Typed client-to-server and server-to-client event callers.
+- Typed client-to-server requests with validated results and optional per-call timeouts.
+- Reliable and unreliable events using Roblox's native remote classes.
 - Payloads with Roblox values, Instance references, nested tables, optionals,
   unions, and type aliases.
 - Generated payload validation.
@@ -33,9 +35,11 @@ runtime protocol and generated revisions during startup.
 
 ## Current limitations
 
-Events use ordinary RemoteEvents and have no request/reply API, custom serialization, automatic
-retries, or client readiness protocol. See the [API reference](./api.md) for
-declaration rules and runtime limits.
+Server-to-client requests are not implemented. Requests use reliable
+transport; unreliable delivery is available for events only. RoGrid does not
+provide custom serialization, automatic retries, or a client readiness
+protocol. See the [API reference](./api.md) for declaration rules and
+validation behavior.
 
 Generated interfaces require the CLI and Rojo. Installing the runtime alone
 does not configure a game. Studio Play must be restarted after changes;

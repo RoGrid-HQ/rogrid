@@ -6,6 +6,21 @@ use support::{Sandbox, failure, success, text};
 
 #[test]
 fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
+    shared_type_edits(
+        "setReady",
+        "RoGrid.event(function(player: Player, item: Types.Item, note: string?) end)",
+    );
+}
+
+#[test]
+fn shared_request_result_edits_regenerate_and_failed_imports_invalidate() {
+    shared_type_edits(
+        "getReady",
+        "RoGrid.request(function(player: Player): (Types.Item, string?) error('not executed by the generator') end)",
+    );
+}
+
+fn shared_type_edits(endpoint: &str, declaration: &str) {
     use std::process::Command;
     let sandbox = Sandbox::new();
     sandbox.provide("wally");
@@ -26,7 +41,7 @@ fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
     )
     .unwrap();
     fs::write(shared.join("Types.luau"), "local T = require('./Id')\nexport type Item = {id: T.Id, position: Vector3?, flags: {[string]: boolean}}\nreturn {}\n").unwrap();
-    fs::write(project.join("src/server/events/Lobby.luau"), "local Types = require('@game/ReplicatedStorage/Shared/Types')\nreturn {setReady = RoGrid.event(function(player: Player, item: Types.Item, note: string?) end)}\n").unwrap();
+    fs::write(project.join("src/server/events/Lobby.luau"), format!("local Types = require('@game/ReplicatedStorage/Shared/Types')\nreturn {{{endpoint} = {declaration}}}\n")).unwrap();
     let dev = || {
         Command::new(env!("CARGO_BIN_EXE_rogrid"))
             .current_dir(&project)
@@ -39,11 +54,11 @@ fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
     };
     let revision = project.join(".rogrid/generated/shared/Revision.luau");
     let callers = project.join(".rogrid/generated/shared/Server.luau");
-    let startup = project.join(".rogrid/generated/server/Start.luau");
-    assert!(success(dev()).contains("~ server.Lobby.setReady"));
+    let definitions = project.join(".rogrid/generated/shared/Definitions.luau");
+    assert!(success(dev()).contains(&format!("~ server.Lobby.{endpoint}")));
     assert!(text(&callers).contains("id: string"));
     assert!(text(&callers).contains("flags: { [string]: boolean }"));
-    assert!(text(&startup).contains("dictionary = shapes["));
+    assert!(text(&definitions).contains("dictionary = shapes["));
     let first = text(&revision);
     success(dev());
     assert_eq!(
@@ -56,7 +71,7 @@ fn shared_payload_edits_regenerate_and_failed_imports_invalidate() {
         "export type Id = number\nreturn {}\n",
     )
     .unwrap();
-    assert!(success(dev()).contains("~ server.Lobby.setReady"));
+    assert!(success(dev()).contains(&format!("~ server.Lobby.{endpoint}")));
     assert!(text(&callers).contains("id: number"));
     assert_ne!(
         text(&revision),
@@ -197,7 +212,7 @@ fn initializes(pm: &str, tm: &str, local: bool) {
     assert!(text(project.join(".rogrid/generated/shared/Server.luau")).contains("setReady"));
     assert!(text(project.join(".rogrid/generated/server/Client.luau")).contains("fireAll"));
     assert!(!text(project.join(".rogrid/generated/shared/Revision.luau")).contains("invalid"));
-    assert!(project.join(".rogrid/events.json").is_file());
+    assert!(project.join(".rogrid/endpoints.json").is_file());
 
     let mut expected = Vec::new();
     if tm == "rokit" {

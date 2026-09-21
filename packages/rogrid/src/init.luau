@@ -9,13 +9,23 @@ local RoGrid = {}
 RoGrid.version = "0.3.0"
 
 -- Internal contract with generated code, including when loaded through a package linker.
-RoGrid._protocol = 3
+RoGrid._protocol = 4
 local runtime = script:WaitForChild("runtime")
 assert(runtime:IsA("ModuleScript"), "RoGrid runtime must be a ModuleScript; reinstall the package")
-RoGrid._runtime = require(runtime)
+local Runtime = require(runtime)
+RoGrid._runtime = Runtime
+export type _Definition = Runtime.Definition
 
 -- Mark an explicitly typed receiver for the generator. No runtime reflection.
-function RoGrid.event<A...>(handler: (A...) -> ()): (A...) -> ()
+export type EventOptions = { reliability: ("reliable" | "unreliable")? }
+local Requests = require(script.requests)
+export type RequestError = Requests.RequestError
+
+function RoGrid.event<A...>(handler: (A...) -> (), _options: EventOptions?): (A...) -> ()
+    return handler
+end
+
+function RoGrid.request<A..., R...>(handler: (A...) -> R...): (A...) -> R...
     return handler
 end
 

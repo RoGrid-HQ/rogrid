@@ -5,6 +5,7 @@
     "ReplicatedStorage": {
       "RoGrid": {"$path": "../src"},
       "Native": {"$path": "native.luau"},
+      "Definitions": {"$path": "studio-definitions.luau"},
       "Probe": {"$className": "RemoteEvent"},
       "SharedModel": {"$className": "Model"}
     },

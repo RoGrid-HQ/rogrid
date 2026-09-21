@@ -37,15 +37,36 @@ impl Side {
 
 use types::Field as Argument;
 
-pub struct Event {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Reliability {
+    Reliable,
+    Unreliable,
+}
+
+impl Reliability {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Reliable => "reliable",
+            Self::Unreliable => "unreliable",
+        }
+    }
+}
+
+pub enum EndpointKind {
+    Event(Reliability),
+    Request(Vec<types::NetworkPayloadType>),
+}
+
+pub struct Endpoint {
     name: String,
     args: Vec<Argument>,
+    kind: EndpointKind,
 }
 
 pub struct Module {
     side: Side,
     name: String,
-    events: Vec<Event>,
+    endpoints: Vec<Endpoint>,
     location: Vec<String>,
 }
 
@@ -77,7 +98,7 @@ pub fn prepare(root: &Path) -> Result<()> {
 
 fn generate_inner(root: &Path, path_first: &[PathBuf]) -> Result<Report> {
     let mut digest = Sha256::new();
-    digest.update(b"rogrid-events-v1\0");
+    digest.update(b"rogrid-endpoints-v1\0");
     digest.update(include_str!("emit.rs"));
     digest.update(include_str!("types.rs"));
     digest.update(include_str!("resolve.rs"));
@@ -88,8 +109,8 @@ fn generate_inner(root: &Path, path_first: &[PathBuf]) -> Result<Report> {
     let map = sourcemap::read(root, path_first)?;
     let modules = discover::modules(root, &config, &map, &mut digest)?;
     // Reporting metadata stays outside the generated Rojo trees. A missing or
-    // unreadable cache simply lists all current events as new.
-    let inventory_path = root.join(".rogrid/events.json");
+    // unreadable cache simply lists all current endpoints as new.
+    let inventory_path = root.join(".rogrid/endpoints.json");
     let previous: report::Inventory = fs::read_to_string(&inventory_path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())

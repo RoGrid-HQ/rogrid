@@ -19,8 +19,9 @@ local function setup(server)
         f.node("ModuleScript", name, roots[side], source)
     end
     local receiverSource = [[
-        return {
+        local receivers = {
             receive = function() end,
+            pose = function() end,
             wide = function(...)
                 local offset = if game:GetService("RunService"):IsServer() then 1 else 0
                 local value = select(1 + offset, ...)
@@ -41,11 +42,21 @@ local function setup(server)
                 script:SetAttribute("Calls", (script:GetAttribute("Calls") or 0) + 1)
             end,
         }
+        if game:GetService("RunService"):IsServer() then
+            receivers.read = function(_player, value, note) return value, note end
+        end
+        return receivers
     ]]
     f.receiver = f.node("ModuleScript", "Tests", if server then f.services.ServerStorage else f.playerScripts, receiverSource)
     f.api = f.require(f.package)
     f.caller = roots[if server then "server" else "shared"]:FindFirstChild(if server then "Client" else "Server")
-    if not server then f.published("test", { "server.Tests.receive", "client.Tests.receive", "server.Tests.many", "client.Tests.many", "server.Tests.deep", "client.Tests.deep", "server.Tests.wide", "client.Tests.wide" }) end
+    if not server then
+        local definitions = f.shared:FindFirstChild("Definitions")
+        f.published("test", f.require(definitions))
+        -- The replicated remote tree comes from another process; client modules load during startup.
+        f.forget(definitions)
+        f.forget(f.shared:FindFirstChild("Revision"))
+    end
     return f
 end
 local function rejects(expected, run)
@@ -66,6 +77,29 @@ for _, server in { true, false } do
         callers.Tests.receive.fire()
         assert(f.sent[1].method == "FireServer" and f.sent[1].args.n == 0)
     end
+    count += 1
+    if server then
+        f.remote("server.Tests.read").OnServerEvent:fire(f.player, "request", 42, nil)
+        local response = f.sent[#f.sent]
+        assert(response.args.n == 5 and response.args[1] == f.player and response.args[2] == "request")
+        assert(response.args[3] == "ok" and response.args[4] == 42 and response.args[5] == nil)
+        callers.Tests.pose.fire(f.player, 42)
+        callers.Tests.pose.fireAll(42)
+    else
+        local result
+        f.spawn(function() result = table.pack(callers.Tests.read.invoke(42, nil, 5)) end)
+        local sent = f.sent[#f.sent]
+        assert(sent.args.n == 3 and sent.args[2] == 42 and sent.args[3] == nil)
+        sent.remote.OnClientEvent:fire(sent.args[1], "ok", 42, nil)
+        f.advance(0)
+        assert(result.n == 2 and result[1] == 42 and result[2] == nil and f.timers() == 0)
+        callers.Tests.pose.fire(42)
+    end
+    assert(f.sent[#f.sent].remote.ClassName == "UnreliableRemoteEvent")
+    table.clear(f.sent)
+    -- Event checks below start with their own outbound calls.
+    if server then callers.Tests.receive.fire(f.player); callers.Tests.receive.fireAll()
+    else callers.Tests.receive.fire() end
     count += 1
     local values = {}; for i = 1, 32 do values[i] = i end
     local function assertSent(sent, offset)

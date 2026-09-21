@@ -8,7 +8,7 @@ Breaking changes can occur in any release.
 
 | Directory | Purpose |
 | --- | --- |
-| `crates/rogrid/` | Rust CLI, initialization, and event generation. |
+| `crates/rogrid/` | Rust CLI, initialization, and network code generation. |
 | `packages/rogrid/` | Luau runtime and package metadata. |
 | `packages/rogrid/docs/` | User guides and reference documentation. |
 | `templates/places/default/` | Starter game embedded in the CLI. |
@@ -19,8 +19,10 @@ Shared internal settings live in [`config.rs`](config.rs) at the repository
 root, used by both the CLI and release tooling. Pesde and Wally package names
 each have one regex and a readable error message there; update both together
 when registry rules change. Development timing, parser stack size, release
-settings and the decompressed file size limit also live there. Add future
-internal limits to this file when needed.
+settings and the decompressed file size limit also live there. Documented
+Roblox transport constraints are recorded there with source links; Roblox
+enforces them. The runtime adds no traffic throttling or concurrency limits.
+Request timeouts are supplied per invocation, without a configured default.
 
 ## Local development
 
@@ -97,9 +99,11 @@ Repository `rokit.toml` pins Lune 0.10.5. `lune run test` runs the real shared
 validator against valid and invalid payloads, including native Roblox values
 implemented by Lune. CI runs this suite in the package checks job.
 It also executes the real runtime with small engine stand-ins to check
-lifecycle guards, validation, diagnostics, and handler-error recovery. These
-stand-ins use cooperative waits and a simulated clock to check that late
-dependencies resume startup. They do not simulate Roblox networking or replication.
+lifecycle guards, validation, diagnostics, and handler-error recovery.
+Request tests cover concurrent replies, trailing nil values, timeout races,
+cleanup, disconnects, malformed responses, and peer identity. The stand-ins
+use cooperative waits and a simulated clock; they do not simulate Roblox
+networking or replication.
 
 CI also checks generated payload annotations and descriptors with luau-lsp
 1.69.0. To run that check locally, put luau-lsp on PATH, set
@@ -109,8 +113,9 @@ and run `cargo test -p rogrid payloads_pass_luau_typechecking -- --ignored`.
 With Wally, Pesde, Rojo, and the same typechecker setup installed,
 `cargo test -p rogrid --test project_tools -- --ignored` initializes real local
 framework projects with both managers, builds them, and typechecks complete
-generated modules. To execute fresh generator output under Lune, including
-protocol and revision mismatch checks, run:
+generated modules, checking both accepted and rejected request calls. To
+execute fresh generator output under Lune, including protocol and revision
+mismatch checks, requests, and unreliable event dispatch, run:
 
 ```sh
 cargo test -p rogrid generated_startup_and_compatibility_guards_execute -- --ignored
@@ -145,8 +150,25 @@ cargo test -p rogrid --test studio -- --ignored
 
 This test uses real Wally initialization and generated callers in two-client
 Studio sessions, through direct and linked package imports. It checks targeted
-delivery, broadcasts, sender identity, invalid client-bound payloads, and
-handler-error recovery. Studio tests run separately from normal CI.
+delivery, broadcasts, sender identity, invalid client-bound payloads,
+typed requests, concurrent results, timeouts, unreliable events in both
+directions, and handler-error recovery. Studio tests run separately from normal CI.
+
+### Networking structure
+
+The generator models events and requests as endpoints. It emits a shared
+`Definitions` module containing directions, delivery kinds, and validation
+schemas, typed callers for each side, and startup modules that bind handlers.
+Changes to arguments, results, delivery kinds, or imported aliases participate
+in revision checks and the endpoint change report.
+
+The Luau runtime separates lifecycle and dispatch (`runtime.luau`), Roblox
+remote operations (`transport.luau`), pending calls and replies
+(`requests.luau`), and payload checks (`validate.luau`). Events and requests
+share the same endpoint registry and transport. Each request has one reliable
+remote; correlation IDs distinguish concurrent replies. Pending calls also
+bind to the expected remote and peer. Keep request bookkeeping independent
+of direction when extending the public API.
 
 The network type model lives in `codegen/types.rs`; built-in runtime checks
 live in `packages/rogrid/src/validate.luau`. Add/remove a leaf in those two places

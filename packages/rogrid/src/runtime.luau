@@ -1,60 +1,53 @@
 --!strict
--- Used by generated code. Public callers keep concrete argument types.
+-- Shared lifecycle and endpoint dispatch used by generated callers.
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Transport = require(script.Parent.transport)
+local Requests = require(script.Parent.requests)
 local validate = require(script.Parent.validate)
 
-type Handler = (...any) -> ()
+type Handler = (...any) -> ...any
+export type Definition = {
+    id: string,
+    receiver: "server" | "client",
+    kind: "event" | "request",
+    reliability: ("reliable" | "unreliable")?,
+    arguments: { validate.Parameter },
+    returns: { validate.Parameter }?,
+}
+type Endpoint = { definition: Definition, remote: Transport.Remote, bound: boolean }
 
 local Runtime = {}
-local remotes: { [string]: RemoteEvent } = {}
--- Receiver paths are selected by generated registration, so their return shape
--- is checked below rather than inferred through a statically known require.
+local endpoints: { [string]: Endpoint } = {}
 local loadModule: (ModuleScript) -> any = require
 local root: Folder? = nil
 local revision: string? = nil
 local side: string? = nil
 local started = false
+local requests = Requests.new()
 
-local function invoke(id: string, handler: Handler, ...: any): ()
-    local ok, message = xpcall(handler :: (...any) -> any, debug.traceback, ...)
-    if not ok then
-        warn(`RoGrid receiver {id} failed:\n{message}`)
-    end
-end
+Players.PlayerRemoving:Connect(function(player: Player)
+    requests.disconnect(if side == "client" and player == Players.LocalPlayer then nil else player)
+end)
 
-function Runtime.begin(destination: string, expected: string, ids: { string }): ()
+function Runtime.begin(destination: string, expected: string, definitions: { Definition }): ()
     assert(side == nil, "RoGrid.start must run only once per server/client. Restart Play after edits.")
     assert((destination == "server") == RunService:IsServer(), "RoGrid startup ran on the wrong side")
     side = destination
     revision = expected
-
-    local folder: Folder
-    if destination == "server" then
-        assert(not ReplicatedStorage:FindFirstChild("RoGridEvents"), "RoGridEvents already exists")
-        folder = Instance.new("Folder")
-        folder.Name = "RoGridEvents"
-        folder:SetAttribute("Revision", expected)
-        -- Publish only after every server receiver has been connected.
-        for _, id in ids do
-            local remote = Instance.new("RemoteEvent")
-            remote.Name = id
-            remote.Parent = folder
-            remotes[id] = remote
-        end
-    else
-        local found = ReplicatedStorage:WaitForChild("RoGridEvents")
-        assert(found:IsA("Folder"), "RoGridEvents must be a Folder")
-        assert(found:GetAttribute("Revision") == expected, "RoGrid client/server generation differs; restart Play after running rogrid dev")
-        folder = found
-        for _, id in ids do
-            local remote = folder:WaitForChild(id)
-            assert(remote:IsA("RemoteEvent"), `RoGrid event {id} must be a RemoteEvent`)
-            remotes[id] = remote
+    local folder = Transport.open(expected)
+    root = folder
+    for _, definition in definitions do
+        assert(not endpoints[definition.id], `Duplicate RoGrid endpoint {definition.id}`)
+        local remote = Transport.remote(folder, definition.id, definition.reliability == "unreliable")
+        endpoints[definition.id] = { definition = definition, remote = remote, bound = false }
+        if definition.kind == "request" and definition.receiver ~= side then
+            assert(remote:IsA("RemoteEvent"), "RoGrid requests require a reliable RemoteEvent")
+            Transport.connect(remote, function(peer: Player?, ...: any)
+                requests.receive(remote, peer, ...)
+            end)
         end
     end
-    root = folder
 end
 
 function Runtime.load(location: { string }, names: { string }): { [string]: Handler }
@@ -84,32 +77,37 @@ function Runtime.load(location: { string }, names: { string }): { [string]: Hand
     return exports
 end
 
-function Runtime.bind(id: string, handler: Handler, parameters: { validate.Parameter }): ()
+function Runtime.bind(id: string, handler: Handler): ()
     assert(not started, "RoGrid receivers must be registered during startup")
-    assert(side ~= nil and string.sub(id, 1, #side + 1) == side .. ".", "RoGrid receiver is on the wrong side")
-    local remote = remotes[id]
-    assert(remote, `RoGrid event {id} is missing`)
-    local function accepted(...: any): boolean
-        local message = validate(parameters, ...)
-        if message == nil then return true end
-        if RunService:IsStudio() then
-            warn(`RoGrid dropped {id}: {message}`)
-        end
-        return false
-    end
-    if side == "server" then
-        remote.OnServerEvent:Connect(function(player: Player, ...: any)
-            if not started or not accepted(...) then
-                return
-            end
-            invoke(id, handler, player, ...)
+    local endpoint = endpoints[id]
+    assert(endpoint, `RoGrid endpoint {id} is missing`)
+    local definition = endpoint.definition
+    assert(side ~= nil and definition.receiver == side, "RoGrid receiver is on the wrong side")
+    assert(not endpoint.bound, `RoGrid receiver {id} is already registered`)
+    endpoint.bound = true
+    local remote = endpoint.remote
+    if definition.kind == "request" then
+        assert(remote:IsA("RemoteEvent"), "RoGrid requests require a reliable RemoteEvent")
+        local returns = assert(definition.returns, "RoGrid request return types are missing")
+        Transport.connect(remote, function(peer: Player?, ...: any)
+            if not started then return end
+            Requests.serve(id, remote, peer, handler, definition.arguments, returns, ...)
         end)
     else
-        remote.OnClientEvent:Connect(function(...: any)
-            if not accepted(...) then
+        Transport.connect(remote, function(peer: Player?, ...: any)
+            if not started then return end
+            local message = validate(definition.arguments, ...)
+            if message then
+                if RunService:IsStudio() then warn(`RoGrid dropped {id}: {message}`) end
                 return
             end
-            invoke(id, handler, ...)
+            local ok, failure
+            if peer then
+                ok, failure = xpcall(handler, debug.traceback, peer, ...)
+            else
+                ok, failure = xpcall(handler, debug.traceback, ...)
+            end
+            if not ok then warn(`RoGrid receiver {id} failed:\n{failure}`) end
         end)
     end
 end
@@ -118,34 +116,44 @@ function Runtime.finish(): ()
     local folder = root
     assert(folder, "RoGrid startup has not begun")
     assert(not started, "RoGrid has already started")
-    started = true
-    if side == "server" then
-        folder.Parent = ReplicatedStorage
+    for id, endpoint in endpoints do
+        assert(endpoint.definition.receiver ~= side or endpoint.bound, `RoGrid receiver {id} has not been registered`)
     end
+    started = true
+    Transport.publish(folder)
 end
 
-local function remoteFor(id: string, expected: string, destination: string): RemoteEvent
-    assert(started, "Call RoGrid.start before firing events; do not fire at receiver module top level")
+local function endpointFor(id: string, expected: string, destination: string, kind: string): Endpoint
+    assert(started, "Call RoGrid.start before sending messages; do not call at receiver module top level")
     assert(expected == revision, "RoGrid callers are stale; regenerate and restart Play")
-    assert(string.sub(id, 1, #destination + 1) == destination .. ".", "RoGrid event has the wrong direction")
-    local remote = remotes[id]
-    assert(remote, `Unknown RoGrid event {id}`)
-    return remote
+    local endpoint = endpoints[id]
+    assert(endpoint, `Unknown RoGrid endpoint {id}`)
+    assert(endpoint.definition.receiver == destination, "RoGrid endpoint has the wrong direction")
+    assert(endpoint.definition.kind == kind, `RoGrid endpoint {id} is not a {kind}`)
+    return endpoint
 end
 
 function Runtime.fireServer(id: string, expected: string, ...: any): ()
     assert(side == "client", "Server event callers can only be used on the client")
-    remoteFor(id, expected, "server"):FireServer(...)
+    Transport.send(endpointFor(id, expected, "server", "event").remote, nil, ...)
 end
 
 function Runtime.fireClient(id: string, expected: string, player: Player, ...: any): ()
     assert(side == "server", "Client event callers can only be used on the server")
-    remoteFor(id, expected, "client"):FireClient(player, ...)
+    Transport.send(endpointFor(id, expected, "client", "event").remote, player, ...)
 end
 
 function Runtime.fireAllClients(id: string, expected: string, ...: any): ()
     assert(side == "server", "Client event callers can only be used on the server")
-    remoteFor(id, expected, "client"):FireAllClients(...)
+    Transport.broadcast(endpointFor(id, expected, "client", "event").remote, ...)
+end
+
+function Runtime.invokeServer(id: string, expected: string, timeoutSeconds: number?, ...: any): ...any
+    assert(side == "client", "Server request callers can only be used on the client")
+    local endpoint = endpointFor(id, expected, "server", "request")
+    local remote = endpoint.remote
+    assert(remote:IsA("RemoteEvent"), "RoGrid requests require a reliable RemoteEvent")
+    return requests.invoke(id, remote, nil, assert(endpoint.definition.returns), timeoutSeconds, ...)
 end
 
 return Runtime
